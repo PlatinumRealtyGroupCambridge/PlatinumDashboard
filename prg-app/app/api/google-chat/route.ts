@@ -10,9 +10,10 @@ import { handleChatMessage } from "@/lib/chat-bot";
 export async function POST(req: NextRequest) {
   const authHeader = req.headers.get("authorization") || "";
   const token = authHeader.replace(/^Bearer\s+/i, "");
+  const requestUrl = `${req.nextUrl.origin}${req.nextUrl.pathname}`;
 
   try {
-    await verifyGoogleChatRequest(token);
+    await verifyGoogleChatRequest(token, requestUrl);
   } catch (err) {
     console.error("Google Chat request failed verification:", err);
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
