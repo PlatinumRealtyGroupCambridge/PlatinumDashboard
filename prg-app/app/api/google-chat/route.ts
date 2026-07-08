@@ -21,11 +21,18 @@ export async function POST(req: NextRequest) {
 
   const event = await req.json().catch(() => null);
   if (!event) {
+    console.error("Google Chat request had no parseable JSON body");
     return NextResponse.json({});
   }
+  // Temporary diagnostic logging while we confirm the exact shape of the
+  // event payload Google is sending for this app (it can differ depending
+  // on which Chat configuration framework the app was set up under) —
+  // safe to remove once messages are confirmed working end-to-end.
+  console.log("Google Chat event received:", JSON.stringify(event).slice(0, 4000));
 
   try {
     const text = await handleChatMessage(event);
+    console.log("Google Chat reply text:", JSON.stringify(text));
     return NextResponse.json(text ? { text } : {});
   } catch (err) {
     console.error("Error handling Google Chat message:", err);

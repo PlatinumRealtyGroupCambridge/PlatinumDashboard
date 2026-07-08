@@ -21,18 +21,23 @@ const GREETING =
   "I can only add agenda items to meetings you're part of, but tasks and goals can go to anyone on the team.";
 
 export async function handleChatMessage(event: ChatEvent): Promise<string> {
+  console.log("handleChatMessage: event.type =", event.type);
   if (event.type === "ADDED_TO_SPACE") {
     return GREETING;
   }
   if (event.type !== "MESSAGE") {
+    console.log("handleChatMessage: unrecognized event.type, returning empty reply");
     return "";
   }
 
   const rawText = (event.message?.argumentText ?? event.message?.text ?? "").trim();
+  console.log("handleChatMessage: rawText =", JSON.stringify(rawText));
   if (!rawText) return GREETING;
 
   const sender = event.message?.sender ?? event.user;
+  console.log("handleChatMessage: sender =", JSON.stringify(sender));
   const user = await resolveSender(sender);
+  console.log("handleChatMessage: resolved user =", user ? `${user.id} (${user.name})` : "none");
   if (!user) {
     return (
       "I couldn't match you to a Platinum Realty team member " +
