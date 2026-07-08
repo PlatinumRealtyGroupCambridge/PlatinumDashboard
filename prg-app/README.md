@@ -56,11 +56,79 @@ most likely causes are a typo in `DATABASE_URL`/`DIRECT_URL` (copy them fresh
 from Supabase's Connect panel) or a missing environment variable. Send me the
 error text and I'll fix it.
 
+## Google Chat bot setup
+
+The bot understands plain English — team members can message it things like
+"add to the team meeting agenda: discuss the Q3 budget" or "add a task for
+Jamie: draft the sign-on packet, due next Friday." It only lets people add
+agenda items to meetings they actually attend, but tasks and goals can be
+assigned to anyone on the team.
+
+This requires two accounts beyond what you've already set up: a Google Cloud
+project (free) and an Anthropic API key (usage-based, but a few cents to a
+couple dollars a month for a team this size).
+
+### A. Get an Anthropic API key
+
+1. Go to [console.anthropic.com](https://console.anthropic.com) and sign up
+   or sign in (this is separate from claude.ai)
+2. Go to **Settings → API Keys**, create a new key, and copy it somewhere safe
+   — you'll paste it into Vercel in step D
+
+### B. Create the Google Cloud project and enable Chat
+
+1. Go to [console.cloud.google.com](https://console.cloud.google.com), signed
+   in as `tim@platinumrealtyboston.com`
+2. Create a new project (top bar → **New Project**) — name it something like
+   "PRG Corporate Dashboard"
+3. On the project's dashboard, copy the **Project number** (not the Project
+   ID) — you'll need this in step D
+4. Go to **APIs & Services → Library**, search for **Google Chat API**, and
+   click **Enable**
+
+### C. Configure the Chat app
+
+1. Still on the Google Chat API page, click the **Configuration** tab
+2. Fill in:
+   - **App name**: Platinum Realty Assistant
+   - **Avatar URL**: your live site's logo, e.g.
+     `https://<your-vercel-domain>/logo-icon.png`
+   - **Description**: Add agenda items, tasks, and goals by chatting
+3. Under **Interactive features**, check both **Receive 1:1 messages** and
+   **Join spaces and group conversations**
+4. Under **Connection settings**, choose **HTTP endpoint URL** and enter:
+   `https://<your-vercel-domain>/api/google-chat`
+5. Set **Authentication Audience** to **App's Google Cloud project**
+6. Under **Visibility**, choose **Make this Chat app available to specific
+   people and groups in platinumrealtygroup.com** and add all 5 team emails
+   (or make it available to the whole domain if you'd rather not list people
+   individually)
+7. Click **Save**
+
+### D. Add the two new environment variables and redeploy
+
+Same as before — Vercel → **Settings → Environment Variables**:
+
+| Name | Value |
+|---|---|
+| `ANTHROPIC_API_KEY` | The key you copied in step A |
+| `GOOGLE_CHAT_PROJECT_NUMBER` | The Project number you copied in step B |
+
+Then redeploy (Deployments → **⋯** → Redeploy, or push a new commit).
+
+### E. Try it
+
+In Google Chat, search for "Platinum Realty Assistant" and start a DM, or add
+it to a Space. If it doesn't recognize you as a team member, it's most often
+because Google Chat isn't sharing your email address with the app — that's a
+Workspace sharing setting we may need to adjust together; send me what the
+bot says and I'll help track it down.
+
 ## What's next
 
 - Wiring up QuickBooks Online, Rentvine, and Aptly for the other 7 dashboards
 - Google Cloud project setup for real "Sign in with Google" (replacing the
-  shared password) and the Google Chat bot for adding agenda items/to-dos/
-  goals by chat message
+  shared password) — this can reuse the same Google Cloud project as the
+  Chat bot above
 - Per-role viewing permissions (e.g. the property manager not seeing
   financials)
