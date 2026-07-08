@@ -7,20 +7,16 @@ const client = new OAuth2Client();
 
 // Verifies that an incoming request really came from Google Chat, per
 // https://developers.google.com/workspace/chat/verify-requests — the
-// request carries a bearer JWT signed by Google. Depending on how the
-// "Authentication Audience" is configured in the Google Cloud Console for
-// this Chat app (a setting that isn't always exposed in the UI, and
-// defaults differently across accounts), Google issues the token in one of
-// two shapes:
-//   - Project Number audience: a self-signed JWT where `iss` is directly
-//     "chat@system.gserviceaccount.com".
-//   - HTTP endpoint URL audience: a standard Google-signed OIDC ID token,
-//     where `iss` is "https://accounts.google.com" and the service account
-//     shows up in a separate `email` claim instead.
-// We accept whichever shape shows up rather than assuming one — the token
-// is still fully verified against Google's public signing keys either way,
-// so this doesn't loosen security, it just tolerates both valid
-// configurations.
+// request carries a bearer JWT signed by Google. Google has been migrating
+// Chat app configuration onto its newer "Workspace Add-ons" framework
+// (visible from the `Google-gsuiteaddons` user-agent on incoming requests),
+// which signs requests from a project-specific service account rather than
+// the classic fixed "chat@system.gserviceaccount.com" account, e.g.
+// "service-<PROJECT_NUMBER>@gcp-sa-gsuiteaddons.iam.gserviceaccount.com".
+// We accept either shape — the token is still fully verified against
+// Google's public signing keys either way, and the Add-ons variant is
+// additionally pinned to this specific project's number, so this doesn't
+// loosen security.
 export async function verifyGoogleChatRequest(bearerToken: string, requestUrl: string) {
   const projectNumber = process.env.GOOGLE_CHAT_PROJECT_NUMBER;
   if (!projectNumber) {
@@ -31,6 +27,7 @@ export async function verifyGoogleChatRequest(bearerToken: string, requestUrl: s
   }
 
   const acceptedAudiences = [projectNumber, requestUrl];
+  const workspaceAddOnsServiceAccount = `service-${projectNumber}@gcp-sa-gsuiteaddons.iam.gserviceaccount.com`;
 
   const ticket = await client.verifyIdToken({
     idToken: bearerToken,
@@ -38,9 +35,14 @@ export async function verifyGoogleChatRequest(bearerToken: string, requestUrl: s
   });
   const payload = ticket.getPayload();
   const isSelfSignedChatJwt = payload?.iss === CHAT_SERVICE_ACCOUNT;
-  const isGoogleSignedIdToken =
+  const isGoogleSignedChatIdToken =
     payload?.iss === GOOGLE_ACCOUNTS_ISSUER && payload?.email === CHAT_SERVICE_ACCOUNT;
-  if (!payload || !(isSelfSignedChatJwt || isGoogleSignedIdToken)) {
+  const isGoogleWorkspaceAddOnsIdToken =
+    payload?.iss === GOOGLE_ACCOUNTS_ISSUER && payload?.email === workspaceAddOnsServiceAccount;
+  if (
+    !payload ||
+    !(isSelfSignedChatJwt || isGoogleSignedChatIdToken || isGoogleWorkspaceAddOnsIdToken)
+  ) {
     throw new Error(`Unexpected token issuer/email: iss=${payload?.iss} email=${payload?.email}`);
   }
   return payload;
