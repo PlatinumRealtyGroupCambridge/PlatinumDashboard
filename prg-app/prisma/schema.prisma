@@ -1,0 +1,159 @@
+// Platinum Realty Group Corporate Dashboard — database schema
+// Models here replace the in-memory arrays (USERS, SERIES, AGENDA, TASKS, GOALS)
+// used in the earlier HTML prototype, with a real relational schema.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum MeetingType {
+  ONE_ON_ONE
+  TEAM
+  OWNERSHIP
+}
+
+enum GoalStatus {
+  GOOD
+  WARN
+  CRIT
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  role      String
+  initials  String
+  color     String
+  createdAt DateTime @default(now())
+
+  // 1-on-1 series where this user is the "owner" (the non-Tim participant),
+  // used to label the series (e.g. "1-on-1: Matt")
+  oneOnOneSeries MeetingSeries[] @relation("OneOnOneOwner")
+
+  participantOf  MeetingParticipant[]
+  agendaItemsAdded AgendaItem[]        @relation("AgendaAddedBy")
+  tasksAssigned  Task[]               @relation("TaskAssignee")
+  tasksCreated   Task[]               @relation("TaskCreatedBy")
+  goalsAssigned  Goal[]               @relation("GoalAssignee")
+  goalsCreated   Goal[]               @relation("GoalCreatedBy")
+}
+
+model MeetingSeries {
+  id            String      @id @default(cuid())
+  type          MeetingType
+  name          String
+  durationMins  Int
+  color         String
+
+  // set only for ONE_ON_ONE series, points at the non-Tim participant
+  ownerId       String?
+  owner         User?       @relation("OneOnOneOwner", fields: [ownerId], references: [id])
+
+  participants  MeetingParticipant[]
+  instances     MeetingInstance[]
+
+  createdAt     DateTime    @default(now())
+}
+
+model MeetingParticipant {
+  id        String        @id @default(cuid())
+  seriesId  String
+  series    MeetingSeries @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User          @relation(fields: [userId], references: [id])
+
+  @@unique([seriesId, userId])
+}
+
+model MeetingInstance {
+  id          String        @id @default(cuid())
+  seriesId    String
+  series      MeetingSeries @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+  startsAt    DateTime
+  // true if this instance was created as the "next occurrence" target of a
+  // tabled item from a prior instance in the same series
+  agendaItems AgendaItem[]
+
+  createdAt   DateTime      @default(now())
+
+  @@index([seriesId, startsAt])
+}
+
+model AgendaItem {
+  id            String          @id @default(cuid())
+  instanceId    String
+  instance      MeetingInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  title         String
+  discussed     Boolean         @default(false)
+  notes         String          @default("")
+  order         Int             @default(0)
+
+  addedById     String?
+  addedBy       User?           @relation("AgendaAddedBy", fields: [addedById], references: [id])
+
+  // true if this item was carried forward ("tabled") from a previous
+  // occurrence of the same meeting series into its current instance
+  tabled        Boolean         @default(false)
+
+  // if this agenda item was itself raised from an existing task/goal via
+  // "Add to meeting", these record the source
+  sourceType    String?         // "task" | "goal"
+  sourceTaskId  String?
+  sourceTask    Task?           @relation("AgendaFromTask", fields: [sourceTaskId], references: [id])
+  sourceGoalId  String?
+  sourceGoal    Goal?           @relation("AgendaFromGoal", fields: [sourceGoalId], references: [id])
+
+  tasks         Task[]          @relation("TaskFromAgendaItem")
+
+  createdAt     DateTime        @default(now())
+}
+
+model Task {
+  id             String       @id @default(cuid())
+  title          String
+  notes          String       @default("")
+  done           Boolean      @default(false)
+  dueDate        DateTime?
+
+  assigneeId     String?
+  assignee       User?        @relation("TaskAssignee", fields: [assigneeId], references: [id])
+
+  createdById    String?
+  createdBy      User?        @relation("TaskCreatedBy", fields: [createdById], references: [id])
+
+  // the agenda item this task was created from, if any
+  agendaItemId   String?
+  agendaItem     AgendaItem?  @relation("TaskFromAgendaItem", fields: [agendaItemId], references: [id])
+
+  // agenda items raised from this task via "Add to meeting"
+  meetingRefs    AgendaItem[] @relation("AgendaFromTask")
+
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+}
+
+model Goal {
+  id             String       @id @default(cuid())
+  title          String
+  notes          String       @default("")
+  status         GoalStatus   @default(GOOD)
+  dueDate        DateTime?
+
+  assigneeId     String?
+  assignee       User?        @relation("GoalAssignee", fields: [assigneeId], references: [id])
+
+  createdById    String?
+  createdBy      User?        @relation("GoalCreatedBy", fields: [createdById], references: [id])
+
+  meetingRefs    AgendaItem[] @relation("AgendaFromGoal")
+
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+}
