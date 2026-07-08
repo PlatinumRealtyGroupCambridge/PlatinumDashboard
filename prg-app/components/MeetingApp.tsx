@@ -1,66 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import type {
-  AgendaItemData,
-  GoalData,
-  MeetingManagementData,
-  SeriesData,
-  TaskData,
-  UserLite,
-} from "@/lib/meeting-types";
-
-// ---------- small formatting helpers ----------
-
-const fmtDate = (d: Date) =>
-  d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
-const fmtTime = (d: Date) =>
-  d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-const fmtDueDate = (d: Date) =>
-  d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-const monthLabel = (year: number, month: number) =>
-  new Date(year, month, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
-
-function daysUntil(due: Date | null) {
-  if (!due) return null;
-  const now = new Date();
-  const a = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const b = new Date(due.getFullYear(), due.getMonth(), due.getDate());
-  return Math.round((b.getTime() - a.getTime()) / 86400000);
-}
-function dueStatus(due: Date | null, done: boolean) {
-  if (done) return "good";
-  const d = daysUntil(due);
-  if (d === null) return "good";
-  if (d < 0) return "crit";
-  if (d <= 3) return "warn";
-  return "good";
-}
-function dueLabel(due: Date | null, done: boolean) {
-  if (done) return "Done";
-  if (!due) return "No due date";
-  const d = daysUntil(due)!;
-  if (d < 0) return `${Math.abs(d)}d overdue`;
-  if (d === 0) return "Due today";
-  return `Due ${fmtDueDate(due)}`;
-}
-
-const GOAL_STATUS_LABEL: Record<string, string> = { GOOD: "On track", WARN: "At risk", CRIT: "Behind" };
-const GOAL_STATUS_CYCLE: Record<string, "GOOD" | "WARN" | "CRIT"> = { GOOD: "WARN", WARN: "CRIT", CRIT: "GOOD" };
-const GOAL_STATUS_CLASS: Record<string, string> = { GOOD: "good", WARN: "warn", CRIT: "crit" };
-
-async function apiJson(url: string, method: string, body?: unknown) {
-  const res = await fetch(url, {
-    method,
-    headers: body ? { "Content-Type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`${method} ${url} failed: ${res.status} ${text}`);
-  }
-  return res.json();
-}
+import type { AgendaItemData, MeetingManagementData, SeriesData, TaskData, UserLite } from "@/lib/meeting-types";
+import { apiJson, fmtDate, fmtDueDate, fmtTime, monthLabel } from "@/lib/meeting-client-utils";
 
 // ---------- component ----------
 
@@ -79,7 +21,6 @@ export default function MeetingApp({
 }) {
   const [data, setData] = useState(initialData);
   const [currentUser] = useState(currentUserId);
-  const [subTab, setSubTab] = useState<"calendar" | "todos" | "goals">("calendar");
   const [calendarViewMode, setCalendarViewMode] = useState<"calendar" | "list">("calendar");
   const [calendarMonthOffset, setCalendarMonthOffset] = useState(0);
   const [openMeeting, setOpenMeeting] = useState<OpenMeeting>(() => {
@@ -92,14 +33,9 @@ export default function MeetingApp({
     return null;
   });
 
-  const [taskFilter, setTaskFilter] = useState<"all" | "open" | "overdue">("all");
-  const [taskEmployeeFilter, setTaskEmployeeFilter] = useState<string>("all");
-  const [goalEmployeeFilter, setGoalEmployeeFilter] = useState<string>("all");
-
   const userById = (id: string | null): UserLite | undefined =>
     id ? data.users.find((u) => u.id === id) : undefined;
   const seriesById = (id: string) => data.series.find((s) => s.id === id);
-  const firstName = (id: string | null) => userById(id)?.name.split(" ")[0] ?? "—";
 
   const seriesForUser = (uid: string) => data.series.filter((s) => s.participantIds.includes(uid));
 
@@ -175,7 +111,6 @@ export default function MeetingApp({
   async function tableToNextMeeting(item: AgendaItemData) {
     const { item: updated, instance } = await apiJson(`/api/agenda-items/${item.id}/table`, "POST");
     setData((d) => {
-      // ensure destination instance exists in series
       const series = d.series.map((s) => {
         if (s.id !== instance.seriesId) return s;
         const hasInstance = s.instances.some((i) => i.id === instance.id);
@@ -230,6 +165,7 @@ export default function MeetingApp({
           title: task.title,
           notes: "",
           done: false,
+          archived: false,
           dueDate: task.dueDate,
           assigneeId: task.assigneeId,
           agendaItemId: item.id,
@@ -249,125 +185,6 @@ export default function MeetingApp({
     setOpenTaskFormFor(null);
   }
 
-  async function addStandaloneTask(title: string, assigneeId: string, dueDate: string) {
-    const { task } = await apiJson("/api/tasks", "POST", { title, assigneeId, dueDate });
-    setData((d) => ({
-      ...d,
-      tasks: [
-        ...d.tasks,
-        {
-          id: task.id,
-          title: task.title,
-          notes: "",
-          done: false,
-          dueDate: task.dueDate,
-          assigneeId: task.assigneeId,
-          agendaItemId: null,
-          meetingRefs: [],
-        },
-      ],
-    }));
-  }
-
-  async function toggleTaskDone(task: TaskData) {
-    const next = !task.done;
-    setData((d) => ({ ...d, tasks: d.tasks.map((t) => (t.id === task.id ? { ...t, done: next } : t)) }));
-    await apiJson(`/api/tasks/${task.id}`, "PATCH", { done: next }).catch(() => {});
-  }
-
-  async function saveTaskNotes(task: TaskData, notes: string) {
-    setData((d) => ({ ...d, tasks: d.tasks.map((t) => (t.id === task.id ? { ...t, notes } : t)) }));
-    await apiJson(`/api/tasks/${task.id}`, "PATCH", { notes }).catch(() => {});
-  }
-
-  async function addStandaloneGoal(title: string, assigneeId: string, dueDate: string) {
-    const { goal } = await apiJson("/api/goals", "POST", { title, assigneeId, dueDate });
-    setData((d) => ({
-      ...d,
-      goals: [
-        ...d.goals,
-        {
-          id: goal.id,
-          title: goal.title,
-          notes: "",
-          status: "GOOD",
-          dueDate: goal.dueDate,
-          assigneeId: goal.assigneeId,
-          meetingRefs: [],
-        },
-      ],
-    }));
-  }
-
-  async function cycleGoalStatus(goal: GoalData) {
-    const next = GOAL_STATUS_CYCLE[goal.status];
-    setData((d) => ({ ...d, goals: d.goals.map((g) => (g.id === goal.id ? { ...g, status: next } : g)) }));
-    await apiJson(`/api/goals/${goal.id}`, "PATCH", { status: next }).catch(() => {});
-  }
-
-  async function saveGoalNotes(goal: GoalData, notes: string) {
-    setData((d) => ({ ...d, goals: d.goals.map((g) => (g.id === goal.id ? { ...g, notes } : g)) }));
-    await apiJson(`/api/goals/${goal.id}`, "PATCH", { notes }).catch(() => {});
-  }
-
-  async function addToMeeting(kind: "task" | "goal", id: string, seriesId: string) {
-    const { agendaItem } = await apiJson(`/api/${kind}s/${id}/meeting-refs`, "POST", { seriesId });
-    const ref = {
-      agendaItemId: agendaItem.id,
-      seriesId: agendaItem.instance.series.id,
-      seriesName: agendaItem.instance.series.name,
-      instanceId: agendaItem.instanceId,
-      startsAt: agendaItem.instance.startsAt,
-    };
-    setData((d) => {
-      const series = d.series.map((s) => {
-        if (s.id !== ref.seriesId) return s;
-        const hasInstance = s.instances.some((i) => i.id === ref.instanceId);
-        const instances = hasInstance
-          ? s.instances
-          : [...s.instances, { id: ref.instanceId, seriesId: ref.seriesId, startsAt: ref.startsAt, agendaItems: [] }];
-        return {
-          ...s,
-          instances: instances.map((inst) =>
-            inst.id === ref.instanceId
-              ? {
-                  ...inst,
-                  agendaItems: [
-                    ...inst.agendaItems,
-                    {
-                      id: agendaItem.id,
-                      instanceId: ref.instanceId,
-                      title: agendaItem.title,
-                      discussed: false,
-                      notes: "",
-                      tabled: false,
-                      addedById: agendaItem.addedById,
-                      sourceType: kind,
-                      sourceTaskId: kind === "task" ? id : null,
-                      sourceGoalId: kind === "goal" ? id : null,
-                      taskIds: [],
-                    },
-                  ],
-                }
-              : inst
-          ),
-        };
-      });
-      if (kind === "task") {
-        return {
-          ...d,
-          series,
-          tasks: d.tasks.map((t) => (t.id === id ? { ...t, meetingRefs: [...t.meetingRefs, ref] } : t)),
-        };
-      }
-      return {
-        ...d,
-        series,
-        goals: d.goals.map((g) => (g.id === id ? { ...g, meetingRefs: [...g.meetingRefs, ref] } : g)),
-      };
-    });
-  }
-
   // ---------- render ----------
 
   if (openMeeting) {
@@ -380,7 +197,6 @@ export default function MeetingApp({
           instance={instance}
           zoomLink={zoomLink}
           userById={userById}
-          currentUser={currentUser}
           onBack={() => setOpenMeeting(null)}
           onToggleDiscussed={toggleDiscussed}
           onSaveNotes={saveAgendaNotes}
@@ -399,82 +215,31 @@ export default function MeetingApp({
   return (
     <div>
       <h1 className="page-title">Meeting Management</h1>
-      <p className="page-sub">Leadership &amp; team meetings, 1-on-1s, to-dos, and goals.</p>
+      <p className="page-sub">Leadership &amp; team meetings and 1-on-1s, and their live agendas.</p>
 
-      <div className="subnav">
-        {[
-          { id: "calendar", label: "Calendar" },
-          { id: "todos", label: "To-Dos" },
-          { id: "goals", label: "Goals" },
-        ].map((t) => (
-          <button
-            key={t.id}
-            className={"subnav-item" + (subTab === t.id ? " active" : "")}
-            onClick={() => setSubTab(t.id as typeof subTab)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      {subTab === "calendar" &&
-        (calendarViewMode === "list" ? (
-          <MeetingsList
-            mySeries={seriesForUser(currentUser)}
-            zoomLink={zoomLink}
-            userById={userById}
-            pendingCount={pendingCount}
-            onOpen={(seriesId, instanceId) => setOpenMeeting({ seriesId, instanceId })}
-            onSwitchView={() => setCalendarViewMode("calendar")}
-          />
-        ) : (
-          <MeetingsCalendar
-            mySeries={seriesForUser(currentUser)}
-            monthOffset={calendarMonthOffset}
-            setMonthOffset={setCalendarMonthOffset}
-            onOpen={(seriesId, instanceId) => setOpenMeeting({ seriesId, instanceId })}
-            onSwitchView={() => setCalendarViewMode("list")}
-          />
-        ))}
-
-      {subTab === "todos" && (
-        <Todos
-          tasks={data.tasks}
-          users={data.users}
-          currentUser={currentUser}
-          userById={userById}
-          taskFilter={taskFilter}
-          setTaskFilter={setTaskFilter}
-          taskEmployeeFilter={taskEmployeeFilter}
-          setTaskEmployeeFilter={setTaskEmployeeFilter}
-          onToggleDone={toggleTaskDone}
-          onSaveNotes={saveTaskNotes}
-          onAddTask={addStandaloneTask}
-          onAddToMeeting={addToMeeting}
+      {calendarViewMode === "list" ? (
+        <MeetingsList
           mySeries={seriesForUser(currentUser)}
+          zoomLink={zoomLink}
+          userById={userById}
+          pendingCount={pendingCount}
+          onOpen={(seriesId, instanceId) => setOpenMeeting({ seriesId, instanceId })}
+          onSwitchView={() => setCalendarViewMode("calendar")}
         />
-      )}
-
-      {subTab === "goals" && (
-        <Goals
-          goals={data.goals}
-          users={data.users}
-          currentUser={currentUser}
-          userById={userById}
-          goalEmployeeFilter={goalEmployeeFilter}
-          setGoalEmployeeFilter={setGoalEmployeeFilter}
-          onCycleStatus={cycleGoalStatus}
-          onSaveNotes={saveGoalNotes}
-          onAddGoal={addStandaloneGoal}
-          onAddToMeeting={addToMeeting}
+      ) : (
+        <MeetingsCalendar
           mySeries={seriesForUser(currentUser)}
+          monthOffset={calendarMonthOffset}
+          setMonthOffset={setCalendarMonthOffset}
+          onOpen={(seriesId, instanceId) => setOpenMeeting({ seriesId, instanceId })}
+          onSwitchView={() => setCalendarViewMode("list")}
         />
       )}
     </div>
   );
 }
 
-// ---------- Meeting card (shared by list/calendar/home-ish views) ----------
+// ---------- Meeting card (shared by list/calendar views) ----------
 
 function MeetingCard({
   series,
@@ -703,7 +468,6 @@ function LiveMeeting({
   instance,
   zoomLink,
   userById,
-  currentUser,
   onBack,
   onToggleDiscussed,
   onSaveNotes,
@@ -719,7 +483,6 @@ function LiveMeeting({
   instance: { id: string; startsAt: string; agendaItems: AgendaItemData[] };
   zoomLink: string;
   userById: (id: string | null) => UserLite | undefined;
-  currentUser: string;
   onBack: () => void;
   onToggleDiscussed: (item: AgendaItemData) => void;
   onSaveNotes: (item: AgendaItemData, notes: string) => void;
@@ -943,501 +706,4 @@ function defaultDueDateInput() {
   const d = new Date();
   d.setDate(d.getDate() + 7);
   return d.toISOString().slice(0, 10);
-}
-
-// ---------- To-Dos ----------
-
-function Todos({
-  tasks,
-  users,
-  currentUser,
-  userById,
-  taskFilter,
-  setTaskFilter,
-  taskEmployeeFilter,
-  setTaskEmployeeFilter,
-  onToggleDone,
-  onSaveNotes,
-  onAddTask,
-  onAddToMeeting,
-  mySeries,
-}: {
-  tasks: TaskData[];
-  users: UserLite[];
-  currentUser: string;
-  userById: (id: string | null) => UserLite | undefined;
-  taskFilter: "all" | "open" | "overdue";
-  setTaskFilter: (f: "all" | "open" | "overdue") => void;
-  taskEmployeeFilter: string;
-  setTaskEmployeeFilter: (v: string) => void;
-  onToggleDone: (task: TaskData) => void;
-  onSaveNotes: (task: TaskData, notes: string) => void;
-  onAddTask: (title: string, assigneeId: string, dueDate: string) => void;
-  onAddToMeeting: (kind: "task" | "goal", id: string, seriesId: string) => void;
-  mySeries: SeriesData[];
-}) {
-  const [openNotesFor, setOpenNotesFor] = useState<string | null>(null);
-  const [newTitle, setNewTitle] = useState("");
-  const [newOwner, setNewOwner] = useState(users[0]?.id ?? "");
-  const [newDue, setNewDue] = useState(defaultDueDateInput());
-
-  let list = tasks.slice();
-  if (taskFilter === "open") list = list.filter((t) => !t.done);
-  if (taskFilter === "overdue")
-    list = list.filter((t) => !t.done && (daysUntil(t.dueDate ? new Date(t.dueDate) : null) ?? 0) < 0);
-  if (taskEmployeeFilter === "mine") list = list.filter((t) => t.assigneeId === currentUser);
-  else if (taskEmployeeFilter !== "all") list = list.filter((t) => t.assigneeId === taskEmployeeFilter);
-
-  list.sort((a, b) => {
-    if (a.done !== b.done) return a.done ? 1 : -1;
-    const ad = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
-    const bd = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
-    return ad - bd;
-  });
-
-  return (
-    <div>
-      <p className="page-sub" style={{ marginTop: -6 }}>
-        Tasks either created directly or spun off from a meeting agenda item. Click a task to add or read
-        notes.
-      </p>
-
-      <div className="panel-toolbar">
-        <div className="filter-row">
-          {(["all", "open", "overdue"] as const).map((f) => (
-            <button
-              key={f}
-              className={"filter-chip" + (taskFilter === f ? " active" : "")}
-              onClick={() => setTaskFilter(f)}
-            >
-              {f[0].toUpperCase() + f.slice(1)}
-            </button>
-          ))}
-        </div>
-        <div className="filter-row">
-          <label style={{ fontSize: 12, color: "var(--text-muted)", alignSelf: "center", marginRight: 2 }}>
-            Employee
-          </label>
-          <select value={taskEmployeeFilter} onChange={(e) => setTaskEmployeeFilter(e.target.value)}>
-            <option value="all">All employees</option>
-            <option value="mine">Mine ({firstNameOf(userById(currentUser))})</option>
-            {users.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.name}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      <div className="card">
-        <table className="list-table">
-          <thead>
-            <tr>
-              <th style={{ width: 34 }}></th>
-              <th>Task</th>
-              <th>Owner</th>
-              <th>Status</th>
-              <th style={{ width: 70 }}>Notes</th>
-            </tr>
-          </thead>
-          <tbody>
-            {list.length === 0 && (
-              <tr>
-                <td colSpan={5} className="empty-state">
-                  No tasks match this filter.
-                </td>
-              </tr>
-            )}
-            {list.map((t) => (
-              <TaskRow
-                key={t.id}
-                task={t}
-                userById={userById}
-                open={openNotesFor === t.id}
-                onToggleOpen={() => setOpenNotesFor(openNotesFor === t.id ? null : t.id)}
-                onToggleDone={() => onToggleDone(t)}
-                onSaveNotes={(notes) => onSaveNotes(t, notes)}
-                onAddToMeeting={(seriesId) => onAddToMeeting("task", t.id, seriesId)}
-                mySeries={mySeries}
-              />
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="add-row">
-        <input
-          type="text"
-          placeholder="New task title…"
-          value={newTitle}
-          onChange={(e) => setNewTitle(e.target.value)}
-        />
-        <select value={newOwner} onChange={(e) => setNewOwner(e.target.value)}>
-          {users.map((u) => (
-            <option key={u.id} value={u.id}>
-              {u.name}
-            </option>
-          ))}
-        </select>
-        <input type="date" value={newDue} onChange={(e) => setNewDue(e.target.value)} />
-        <button
-          className="btn primary"
-          onClick={() => {
-            if (newTitle.trim()) {
-              onAddTask(newTitle.trim(), newOwner, newDue);
-              setNewTitle("");
-            }
-          }}
-        >
-          Add
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function firstNameOf(u: UserLite | undefined) {
-  return u ? u.name.split(" ")[0] : "";
-}
-
-function TaskRow({
-  task,
-  userById,
-  open,
-  onToggleOpen,
-  onToggleDone,
-  onSaveNotes,
-  onAddToMeeting,
-  mySeries,
-}: {
-  task: TaskData;
-  userById: (id: string | null) => UserLite | undefined;
-  open: boolean;
-  onToggleOpen: () => void;
-  onToggleDone: () => void;
-  onSaveNotes: (notes: string) => void;
-  onAddToMeeting: (seriesId: string) => void;
-  mySeries: SeriesData[];
-}) {
-  const [notes, setNotes] = useState(task.notes);
-  const hasNotes = task.notes.trim().length > 0;
-  const due = task.dueDate ? new Date(task.dueDate) : null;
-
-  return (
-    <>
-      <tr>
-        <td>
-          <button className={"checkbox" + (task.done ? " checked" : "")} onClick={onToggleDone} aria-label="Toggle done" />
-        </td>
-        <td className={task.done ? "strike-text" : ""}>
-          {task.title}
-          {task.agendaItemId && (
-            <span style={{ color: "var(--text-muted)", fontSize: 11.5 }}> · from meeting</span>
-          )}
-        </td>
-        <td className="owner-chip">{userById(task.assigneeId)?.name ?? "Unassigned"}</td>
-        <td>
-          <span className={"status-badge " + dueStatus(due, task.done)}>{dueLabel(due, task.done)}</span>
-        </td>
-        <td>
-          <button className="btn" onClick={onToggleOpen}>
-            {open ? "Close" : hasNotes ? "View" : "+ Add"}
-          </button>
-        </td>
-      </tr>
-      {open && (
-        <tr>
-          <td></td>
-          <td colSpan={4} style={{ paddingTop: 0 }}>
-            <div className="detail-panel">
-              <div className="mini-label">Notes</div>
-              <textarea
-                className="ai-notes"
-                placeholder="Notes on this task…"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-              />
-              <div className="ai-actions">
-                <button className="btn" onClick={() => onSaveNotes(notes)}>
-                  Save note
-                </button>
-                {notes.trim() && <span className="saved-tag">✓ Saved</span>}
-              </div>
-
-              <div className="mini-label">Meetings</div>
-              <MeetingRefs refs={task.meetingRefs} />
-              <AddToMeeting mySeries={mySeries} onAdd={onAddToMeeting} />
-            </div>
-          </td>
-        </tr>
-      )}
-    </>
-  );
-}
-
-function MeetingRefs({ refs }: { refs: TaskData["meetingRefs"] }) {
-  if (!refs.length) return null;
-  return (
-    <>
-      {refs.map((r) => (
-        <span key={r.agendaItemId} className="meeting-ref-chip">
-          → On agenda: {r.seriesName} ({fmtDate(new Date(r.startsAt))})
-        </span>
-      ))}
-    </>
-  );
-}
-
-function AddToMeeting({
-  mySeries,
-  onAdd,
-}: {
-  mySeries: SeriesData[];
-  onAdd: (seriesId: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [seriesId, setSeriesId] = useState(mySeries[0]?.id ?? "");
-
-  if (!mySeries.length) return null;
-
-  if (!open) {
-    return (
-      <button className="btn" onClick={() => setOpen(true)}>
-        + Add to meeting
-      </button>
-    );
-  }
-
-  return (
-    <div className="inline-form">
-      <select value={seriesId} onChange={(e) => setSeriesId(e.target.value)}>
-        {mySeries.map((s) => {
-          const inst = nextInstance(s);
-          return (
-            <option key={s.id} value={s.id}>
-              {s.name} — next: {inst ? fmtDate(new Date(inst.startsAt)) : "—"}
-            </option>
-          );
-        })}
-      </select>
-      <button
-        className="btn primary"
-        onClick={() => {
-          onAdd(seriesId);
-          setOpen(false);
-        }}
-      >
-        Add
-      </button>
-      <button className="btn" onClick={() => setOpen(false)}>
-        Cancel
-      </button>
-    </div>
-  );
-}
-
-// ---------- Goals ----------
-
-function Goals({
-  goals,
-  users,
-  currentUser,
-  userById,
-  goalEmployeeFilter,
-  setGoalEmployeeFilter,
-  onCycleStatus,
-  onSaveNotes,
-  onAddGoal,
-  onAddToMeeting,
-  mySeries,
-}: {
-  goals: GoalData[];
-  users: UserLite[];
-  currentUser: string;
-  userById: (id: string | null) => UserLite | undefined;
-  goalEmployeeFilter: string;
-  setGoalEmployeeFilter: (v: string) => void;
-  onCycleStatus: (goal: GoalData) => void;
-  onSaveNotes: (goal: GoalData, notes: string) => void;
-  onAddGoal: (title: string, assigneeId: string, dueDate: string) => void;
-  onAddToMeeting: (kind: "task" | "goal", id: string, seriesId: string) => void;
-  mySeries: SeriesData[];
-}) {
-  const [openNotesFor, setOpenNotesFor] = useState<string | null>(null);
-  const [newTitle, setNewTitle] = useState("");
-  const [newOwner, setNewOwner] = useState(users[0]?.id ?? "");
-  const [newDue, setNewDue] = useState(defaultDueDateInput());
-
-  let list = goals.slice();
-  if (goalEmployeeFilter === "mine") list = list.filter((g) => g.assigneeId === currentUser);
-  else if (goalEmployeeFilter !== "all") list = list.filter((g) => g.assigneeId === goalEmployeeFilter);
-
-  return (
-    <div>
-      <p className="page-sub" style={{ marginTop: -6 }}>
-        Longer-horizon goals, owned by a person, tracked to a target date.
-      </p>
-      <div className="proto-banner" style={{ marginBottom: 20 }}>
-        <b>How status works:</b> it&apos;s a judgment call the goal&apos;s <b>owner</b> makes — not
-        calculated automatically from the due date. Click a status badge below to cycle it (On track →
-        At risk → Behind), the same way you&apos;d update it yourself during a 1-on-1 or the ownership
-        meeting.
-      </div>
-
-      <div className="panel-toolbar">
-        <div className="filter-row">
-          <label style={{ fontSize: 12, color: "var(--text-muted)", alignSelf: "center", marginRight: 2 }}>
-            Employee
-          </label>
-          <select value={goalEmployeeFilter} onChange={(e) => setGoalEmployeeFilter(e.target.value)}>
-            <option value="all">All employees</option>
-            <option value="mine">Mine ({firstNameOf(userById(currentUser))})</option>
-            {users.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.name}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      <div className="card">
-        <table className="list-table">
-          <thead>
-            <tr>
-              <th>Goal</th>
-              <th>Owner</th>
-              <th>Target</th>
-              <th>Status</th>
-              <th style={{ width: 70 }}>Notes</th>
-            </tr>
-          </thead>
-          <tbody>
-            {list.length === 0 && (
-              <tr>
-                <td colSpan={5} className="empty-state">
-                  No goals match this filter.
-                </td>
-              </tr>
-            )}
-            {list.map((g) => (
-              <GoalRow
-                key={g.id}
-                goal={g}
-                userById={userById}
-                open={openNotesFor === g.id}
-                onToggleOpen={() => setOpenNotesFor(openNotesFor === g.id ? null : g.id)}
-                onCycleStatus={() => onCycleStatus(g)}
-                onSaveNotes={(notes) => onSaveNotes(g, notes)}
-                onAddToMeeting={(seriesId) => onAddToMeeting("goal", g.id, seriesId)}
-                mySeries={mySeries}
-              />
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="add-row">
-        <input
-          type="text"
-          placeholder="New goal…"
-          value={newTitle}
-          onChange={(e) => setNewTitle(e.target.value)}
-        />
-        <select value={newOwner} onChange={(e) => setNewOwner(e.target.value)}>
-          {users.map((u) => (
-            <option key={u.id} value={u.id}>
-              {u.name}
-            </option>
-          ))}
-        </select>
-        <input type="date" value={newDue} onChange={(e) => setNewDue(e.target.value)} />
-        <button
-          className="btn primary"
-          onClick={() => {
-            if (newTitle.trim()) {
-              onAddGoal(newTitle.trim(), newOwner, newDue);
-              setNewTitle("");
-            }
-          }}
-        >
-          Add
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function GoalRow({
-  goal,
-  userById,
-  open,
-  onToggleOpen,
-  onCycleStatus,
-  onSaveNotes,
-  onAddToMeeting,
-  mySeries,
-}: {
-  goal: GoalData;
-  userById: (id: string | null) => UserLite | undefined;
-  open: boolean;
-  onToggleOpen: () => void;
-  onCycleStatus: () => void;
-  onSaveNotes: (notes: string) => void;
-  onAddToMeeting: (seriesId: string) => void;
-  mySeries: SeriesData[];
-}) {
-  const [notes, setNotes] = useState(goal.notes);
-  const hasNotes = goal.notes.trim().length > 0;
-
-  return (
-    <>
-      <tr>
-        <td>{goal.title}</td>
-        <td className="owner-chip">{userById(goal.assigneeId)?.name ?? "Unassigned"}</td>
-        <td>{goal.dueDate ? fmtDueDate(new Date(goal.dueDate)) : "No target"}</td>
-        <td>
-          <button
-            className={"status-badge " + GOAL_STATUS_CLASS[goal.status]}
-            onClick={onCycleStatus}
-            title="Click to update status"
-          >
-            {GOAL_STATUS_LABEL[goal.status]}
-          </button>
-        </td>
-        <td>
-          <button className="btn" onClick={onToggleOpen}>
-            {open ? "Close" : hasNotes ? "View" : "+ Add"}
-          </button>
-        </td>
-      </tr>
-      {open && (
-        <tr>
-          <td></td>
-          <td colSpan={4} style={{ paddingTop: 0 }}>
-            <div className="detail-panel">
-              <div className="mini-label">Notes</div>
-              <textarea
-                className="ai-notes"
-                placeholder="Notes on this goal…"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-              />
-              <div className="ai-actions">
-                <button className="btn" onClick={() => onSaveNotes(notes)}>
-                  Save note
-                </button>
-                {notes.trim() && <span className="saved-tag">✓ Saved</span>}
-              </div>
-
-              <div className="mini-label">Meetings</div>
-              <MeetingRefs refs={goal.meetingRefs} />
-              <AddToMeeting mySeries={mySeries} onAdd={onAddToMeeting} />
-            </div>
-          </td>
-        </tr>
-      )}
-    </>
-  );
 }

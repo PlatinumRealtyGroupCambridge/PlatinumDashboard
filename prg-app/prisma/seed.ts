@@ -2,38 +2,91 @@ import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
-// ---------- date helpers (mirrors the validated prototype's scheduling logic) ----------
+// Bump this any time the recurring meeting schedule below changes — it
+// triggers a one-time rebuild of MeetingSeries/MeetingInstance rows (see
+// maybeReseedSchedule() at the bottom). Sample tasks/goals are seeded
+// separately and are NOT affected by this version bump.
+const SCHEDULE_VERSION = "2";
 
-function nextWeekday(base: Date, targetDow: number, hour: number, minute: number) {
-  const d = new Date(base);
-  const diff = (targetDow - d.getDay() + 7) % 7;
-  d.setDate(d.getDate() + (diff === 0 ? 7 : diff));
-  d.setHours(hour, minute, 0, 0);
-  return d;
+const TZ = "America/New_York";
+
+// ---------- timezone-aware date helpers ----------
+// All meeting times are specified in Eastern time (the company's home
+// timezone) and need to resolve to the correct UTC instant regardless of
+// whether Eastern is currently in EST or EDT, and regardless of what
+// timezone the server/build machine itself runs in (Vercel's build/runtime
+// defaults to UTC).
+
+// Returns the given Y-M-D/H:M *as observed in `timeZone`*, converted to the
+// correct UTC instant. Handles EST/EDT automatically based on the date.
+function zonedTimeToUtc(year: number, month: number, day: number, hour: number, minute: number) {
+  const asIfUTC = new Date(Date.UTC(year, month, day, hour, minute, 0));
+  const inTargetZone = new Date(asIfUTC.toLocaleString("en-US", { timeZone: TZ }));
+  const offset = asIfUTC.getTime() - inTargetZone.getTime();
+  return new Date(asIfUTC.getTime() + offset);
 }
 
-function nextMonthlyFirstWeekday(base: Date, targetDow: number, hour: number, minute: number) {
-  const d = new Date(base);
-  const candidate = new Date(d.getFullYear(), d.getMonth() + 1, 1);
-  while (candidate.getDay() !== targetDow) candidate.setDate(candidate.getDate() + 1);
-  candidate.setHours(hour, minute, 0, 0);
-  return candidate;
+// "Now," expressed as Y/M/D/H/M in the company's local (Eastern) calendar,
+// so recurring-meeting math lands on the right Eastern calendar day no
+// matter what timezone the build machine itself is in.
+function nyNow() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date());
+  const get = (type: string) => Number(parts.find((p) => p.type === type)!.value);
+  return { year: get("year"), month: get("month") - 1, day: get("day") };
 }
 
-function buildInstanceDates(startFn: () => Date, count: number, incrementDays: number) {
-  const first = startFn();
-  const arr = [first];
-  for (let i = 1; i < count; i++) {
-    const d = new Date(arr[i - 1]);
-    d.setDate(d.getDate() + incrementDays);
-    arr.push(d);
+// Builds `count` weekly occurrences of `targetDow` (0=Sun..6=Sat) at the
+// given Eastern hour/minute, starting from the next such day after today
+// (never today itself, so a freshly-seeded series never shows "today").
+function buildWeeklyInstances(targetDow: number, hour: number, minute: number, count: number) {
+  const now = nyNow();
+  const todayUtcMidnight = Date.UTC(now.year, now.month, now.day);
+  const todayDow = new Date(todayUtcMidnight).getUTCDay();
+  const diff = (targetDow - todayDow + 7) % 7;
+  const firstOffset = diff === 0 ? 7 : diff;
+
+  const dates: Date[] = [];
+  for (let i = 0; i < count; i++) {
+    const dayOffset = firstOffset + i * 7;
+    const d = new Date(todayUtcMidnight + dayOffset * 86400000);
+    dates.push(zonedTimeToUtc(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), hour, minute));
   }
-  return arr;
+  return dates;
+}
+
+// Builds `count` monthly occurrences of the nth `targetDow` (e.g. n=2,
+// targetDow=4 → "2nd Thursday") of each of the next `count` months, at the
+// given Eastern hour/minute.
+function buildMonthlyInstances(n: number, targetDow: number, hour: number, minute: number, count: number) {
+  const now = nyNow();
+  const dates: Date[] = [];
+  for (let i = 0; i < count; i++) {
+    const monthIndex = now.month + 1 + i; // always start with *next* month
+    const year = now.year + Math.floor(monthIndex / 12);
+    const month = ((monthIndex % 12) + 12) % 12;
+
+    let day = 1;
+    let d = new Date(Date.UTC(year, month, day));
+    while (d.getUTCDay() !== targetDow) {
+      day++;
+      d = new Date(Date.UTC(year, month, day));
+    }
+    day += (n - 1) * 7;
+
+    dates.push(zonedTimeToUtc(year, month, day, hour, minute));
+  }
+  return dates;
 }
 
 async function main() {
-  const now = new Date();
-
   // ---------- team roster ----------
   const usersData = [
     { key: "tim", name: "Tim Andrew", email: "tim@platinumrealtygroup.com", role: "CEO", initials: "TA", color: "series-blue" },
@@ -59,28 +112,31 @@ async function main() {
     });
     users[u.key] = created;
   }
-
   console.log(`Seeded ${usersData.length} users.`);
 
-  // ---------- meeting series + instances ----------
-  // Skip re-seeding series/meetings if they already exist, so re-running
-  // `prisma migrate deploy` on every build doesn't duplicate data.
-  const existingSeriesCount = await prisma.meetingSeries.count();
-  if (existingSeriesCount > 0) {
-    console.log("Meeting series already seeded — skipping meeting/task/goal seed data.");
+  await maybeReseedSchedule(users);
+  await seedSampleTasksAndGoals(users);
+}
+
+// ---------- meeting schedule (version-gated rebuild) ----------
+
+type SeriesSeed = {
+  key: string;
+  type: "ONE_ON_ONE" | "TEAM" | "OWNERSHIP";
+  name: string;
+  durationMins: number;
+  color: string;
+  participantKeys: string[];
+  ownerKey?: string;
+  dates: Date[];
+};
+
+async function maybeReseedSchedule(users: Record<string, { id: string }>) {
+  const meta = await prisma.appMeta.findUnique({ where: { key: "scheduleVersion" } });
+  if (meta?.value === SCHEDULE_VERSION) {
+    console.log("Meeting schedule already up to date — skipping series reseed.");
     return;
   }
-
-  type SeriesSeed = {
-    key: string;
-    type: "ONE_ON_ONE" | "TEAM" | "OWNERSHIP";
-    name: string;
-    durationMins: number;
-    color: string;
-    participantKeys: string[];
-    ownerKey?: string;
-    dates: Date[];
-  };
 
   const seriesSeeds: SeriesSeed[] = [
     {
@@ -91,7 +147,7 @@ async function main() {
       color: "series-aqua",
       participantKeys: ["tim", "matt"],
       ownerKey: "matt",
-      dates: buildInstanceDates(() => nextWeekday(now, 1, 9, 0), 8, 7),
+      dates: buildWeeklyInstances(2, 13, 0, 8), // Tuesdays 1:00pm ET
     },
     {
       key: "s-1on1-phong",
@@ -101,7 +157,7 @@ async function main() {
       color: "series-violet",
       participantKeys: ["tim", "phong"],
       ownerKey: "phong",
-      dates: buildInstanceDates(() => nextWeekday(now, 1, 9, 30), 8, 7),
+      dates: buildWeeklyInstances(5, 12, 30, 8), // Fridays 12:30pm ET
     },
     {
       key: "s-1on1-jamie",
@@ -111,7 +167,7 @@ async function main() {
       color: "series-magenta",
       participantKeys: ["tim", "jamie"],
       ownerKey: "jamie",
-      dates: buildInstanceDates(() => nextWeekday(now, 2, 9, 0), 8, 7),
+      dates: buildWeeklyInstances(5, 13, 30, 8), // Fridays 1:30pm ET
     },
     {
       key: "s-1on1-jeremey",
@@ -121,7 +177,7 @@ async function main() {
       color: "series-yellow",
       participantKeys: ["tim", "jeremey"],
       ownerKey: "jeremey",
-      dates: buildInstanceDates(() => nextWeekday(now, 2, 9, 30), 8, 7),
+      dates: buildWeeklyInstances(5, 14, 0, 8), // Fridays 2:00pm ET
     },
     {
       key: "s-team",
@@ -130,7 +186,7 @@ async function main() {
       durationMins: 60,
       color: "series-blue",
       participantKeys: ["tim", "matt", "phong", "jamie", "jeremey"],
-      dates: buildInstanceDates(() => nextWeekday(now, 3, 10, 0), 8, 7),
+      dates: buildWeeklyInstances(2, 14, 0, 8), // Tuesdays 2:00pm ET
     },
     {
       key: "s-owner",
@@ -139,11 +195,20 @@ async function main() {
       durationMins: 60,
       color: "series-violet",
       participantKeys: ["tim", "matt", "phong"],
-      dates: buildInstanceDates(() => nextMonthlyFirstWeekday(now, 4, 14, 0), 3, 30),
+      dates: buildMonthlyInstances(2, 4, 13, 0, 3), // 2nd Thursday, 1:00pm ET
     },
   ];
 
-  const seriesRecords: Record<string, { id: string }> = {};
+  // Deleting a MeetingSeries cascades to its MeetingInstance rows, which
+  // cascades to their AgendaItem rows. Any Task/Goal that had been linked
+  // to one of those agenda items simply has that link cleared (its
+  // agendaItemId / meetingRefs get set to null) — the task/goal itself is
+  // untouched. This is a clean way to re-lay-down the correct schedule, at
+  // the cost of clearing out agenda notes/checkmarks on the meetings being
+  // rescheduled.
+  await prisma.meetingSeries.deleteMany({});
+  console.log("Cleared existing meeting series ahead of schedule rebuild.");
+
   const firstInstanceBySeries: Record<string, { id: string }> = {};
 
   for (const s of seriesSeeds) {
@@ -154,29 +219,18 @@ async function main() {
         durationMins: s.durationMins,
         color: s.color,
         ownerId: s.ownerKey ? users[s.ownerKey].id : null,
-        participants: {
-          create: s.participantKeys.map((k) => ({ userId: users[k].id })),
-        },
-        instances: {
-          create: s.dates.map((d) => ({ startsAt: d })),
-        },
+        participants: { create: s.participantKeys.map((k) => ({ userId: users[k].id })) },
+        instances: { create: s.dates.map((d) => ({ startsAt: d })) },
       },
       include: { instances: { orderBy: { startsAt: "asc" } } },
     });
-    seriesRecords[s.key] = series;
     firstInstanceBySeries[s.key] = series.instances[0];
   }
+  console.log(`Seeded ${seriesSeeds.length} meeting series with the corrected schedule.`);
 
-  console.log(`Seeded ${seriesSeeds.length} meeting series.`);
-
-  // ---------- sample agenda items on the first upcoming occurrence of each series ----------
   async function addAgendaItem(seriesKey: string, title: string, addedByKey: string) {
     return prisma.agendaItem.create({
-      data: {
-        instanceId: firstInstanceBySeries[seriesKey].id,
-        title,
-        addedById: users[addedByKey].id,
-      },
+      data: { instanceId: firstInstanceBySeries[seriesKey].id, title, addedById: users[addedByKey].id },
     });
   }
 
@@ -191,11 +245,26 @@ async function main() {
   await addAgendaItem("s-1on1-jeremey", "Vendor contract renewals due in August", "jeremey");
   await addAgendaItem("s-owner", "Q3 owner distribution timing", "phong");
   await addAgendaItem("s-owner", "Cambridge duplex acquisition — next steps", "tim");
-
   console.log("Seeded sample agenda items.");
 
-  // ---------- sample tasks ----------
-  const inDays = (n: number) => new Date(now.getTime() + n * 86400000);
+  await prisma.appMeta.upsert({
+    where: { key: "scheduleVersion" },
+    update: { value: SCHEDULE_VERSION },
+    create: { key: "scheduleVersion", value: SCHEDULE_VERSION },
+  });
+}
+
+// ---------- sample tasks & goals (independent of the schedule version) ----------
+
+async function seedSampleTasksAndGoals(users: Record<string, { id: string }>) {
+  const existingTasks = await prisma.task.count();
+  const existingGoals = await prisma.goal.count();
+  if (existingTasks > 0 || existingGoals > 0) {
+    console.log("Sample tasks/goals already exist — skipping.");
+    return;
+  }
+
+  const inDays = (n: number) => new Date(Date.now() + n * 86400000);
 
   await prisma.task.create({
     data: { title: "Send Q2 financial summary to owners", assigneeId: users.phong.id, dueDate: inDays(1), createdById: users.phong.id },
@@ -212,14 +281,14 @@ async function main() {
       assigneeId: users.tim.id,
       dueDate: inDays(-5),
       done: true,
+      archived: true,
+      archivedAt: new Date(),
       notes: "Confirmed with Phong — budget approved at $42k.",
       createdById: users.tim.id,
     },
   });
-
   console.log("Seeded sample tasks.");
 
-  // ---------- sample goals ----------
   await prisma.goal.create({
     data: { title: "Increase average Google review rating to 4.8", assigneeId: users.tim.id, dueDate: inDays(84), status: "GOOD", createdById: users.tim.id },
   });
@@ -232,7 +301,6 @@ async function main() {
   await prisma.goal.create({
     data: { title: "Finalize QBO + Rentvine dashboard data pipeline", assigneeId: users.phong.id, dueDate: inDays(38), status: "GOOD", createdById: users.phong.id },
   });
-
   console.log("Seeded sample goals.");
 }
 

@@ -1,8 +1,8 @@
 import { notFound } from "next/navigation";
-import { SECTIONS, sectionById } from "@/lib/sections";
+import { DASHBOARD_SECTIONS } from "@/lib/sections";
 
 export function generateStaticParams() {
-  return SECTIONS.filter((s) => !s.live).map((s) => ({ section: s.id }));
+  return DASHBOARD_SECTIONS.map((s) => ({ section: s.id }));
 }
 
 export default async function ComingSoonPage({
@@ -11,8 +11,8 @@ export default async function ComingSoonPage({
   params: Promise<{ section: string }>;
 }) {
   const { section: sectionId } = await params;
-  const section = sectionById(sectionId);
-  if (!section || section.live) notFound();
+  const section = DASHBOARD_SECTIONS.find((s) => s.id === sectionId);
+  if (!section) notFound();
 
   return (
     <div>

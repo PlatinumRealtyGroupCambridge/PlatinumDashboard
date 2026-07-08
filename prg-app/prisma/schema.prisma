@@ -24,6 +24,13 @@ enum GoalStatus {
   CRIT
 }
 
+// Simple key/value store for one-off app bookkeeping — currently used to
+// gate a one-time re-seed of the meeting schedule (see prisma/seed.ts).
+model AppMeta {
+  key   String @id
+  value String
+}
+
 model User {
   id        String   @id @default(cuid())
   name      String
@@ -122,6 +129,11 @@ model Task {
   done           Boolean      @default(false)
   dueDate        DateTime?
 
+  // Archiving happens either explicitly (the Delete button) or
+  // automatically when the task is checked off as done.
+  archived       Boolean      @default(false)
+  archivedAt     DateTime?
+
   assigneeId     String?
   assignee       User?        @relation("TaskAssignee", fields: [assigneeId], references: [id])
 
@@ -145,6 +157,12 @@ model Goal {
   notes          String       @default("")
   status         GoalStatus   @default(GOOD)
   dueDate        DateTime?
+
+  // Goals get the same "checked off as complete" treatment as tasks —
+  // done also implies archived (see the archiving note on Task above).
+  done           Boolean      @default(false)
+  archived       Boolean      @default(false)
+  archivedAt     DateTime?
 
   assigneeId     String?
   assignee       User?        @relation("GoalAssignee", fields: [assigneeId], references: [id])

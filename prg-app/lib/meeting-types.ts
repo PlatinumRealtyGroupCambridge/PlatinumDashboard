@@ -50,6 +50,7 @@ export type TaskData = {
   title: string;
   notes: string;
   done: boolean;
+  archived: boolean;
   dueDate: string | null;
   assigneeId: string | null;
   agendaItemId: string | null;
@@ -61,6 +62,8 @@ export type GoalData = {
   title: string;
   notes: string;
   status: "GOOD" | "WARN" | "CRIT";
+  done: boolean;
+  archived: boolean;
   dueDate: string | null;
   assigneeId: string | null;
   meetingRefs: MeetingRef[];

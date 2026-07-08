@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getCurrentViewer } from "@/lib/auth";
-import { SECTIONS, ZOOM_LINK } from "@/lib/sections";
+import { ALL_SECTIONS, ZOOM_LINK } from "@/lib/sections";
 import { formatMeetingDateTime } from "@/lib/format";
 import ZoomJoinButton from "@/components/ZoomJoinButton";
 
@@ -27,8 +27,8 @@ export default async function HomePage() {
         },
       },
     }),
-    prisma.task.count({ where: { assigneeId: viewer.id, done: false } }),
-    prisma.task.count({ where: { assigneeId: viewer.id, done: false, dueDate: { lt: now } } }),
+    prisma.task.count({ where: { assigneeId: viewer.id, done: false, archived: false } }),
+    prisma.task.count({ where: { assigneeId: viewer.id, done: false, archived: false, dueDate: { lt: now } } }),
   ]);
 
   const upcoming = mySeries
@@ -71,7 +71,7 @@ export default async function HomePage() {
 
       <div className="section-label">Dashboards</div>
       <div className="dash-grid">
-        {SECTIONS.map((s) => (
+        {ALL_SECTIONS.map((s) => (
           <Link key={s.id} href={s.href} className="card dash-card">
             <span className="dot" style={{ background: `var(--${s.color})` }} />
             <div style={{ flex: 1, minWidth: 0 }}>
