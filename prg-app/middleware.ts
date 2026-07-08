@@ -1,15 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createHash } from "crypto";
 
 const SESSION_COOKIE = "prg_session";
 
-function expectedSessionToken() {
+// Middleware runs on Vercel's Edge runtime, which does not support Node's
+// built-in `crypto` module (createHash, etc.) — only the standard Web
+// Crypto API (`crypto.subtle`, available as a global). This computes the
+// same SHA-256 hex digest as lib/auth.ts's Node-based version (both hash
+// the same UTF-8 bytes with the same algorithm, so the two stay in sync).
+async function expectedSessionToken() {
   const secret = process.env.SESSION_SECRET || "dev-secret";
   const password = process.env.SITE_PASSWORD || "";
-  return createHash("sha256").update(`${secret}:${password}`).digest("hex");
+  const data = new TextEncoder().encode(`${secret}:${password}`);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
-export function middleware(req: NextRequest) {
+export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   // Always allow the login page itself and its API route, plus Next.js
@@ -27,7 +35,8 @@ export function middleware(req: NextRequest) {
   }
 
   const token = req.cookies.get(SESSION_COOKIE)?.value;
-  if (token && token === expectedSessionToken()) {
+  const expected = await expectedSessionToken();
+  if (token && token === expected) {
     return NextResponse.next();
   }
 
