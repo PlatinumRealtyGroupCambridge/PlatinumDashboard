@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { getCurrentViewer } from "@/lib/auth";
 import { getMeetingManagementData } from "@/lib/get-meeting-data";
 import { ZOOM_LINK } from "@/lib/sections";
@@ -11,13 +12,12 @@ export default async function MeetingsPage({
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
   const params = await searchParams;
-  const [viewer, data] = await Promise.all([getCurrentViewer(), getMeetingManagementData()]);
+  const viewer = await getCurrentViewer();
+  if (!viewer) redirect("/login");
+
+  const data = await getMeetingManagementData({ id: viewer.id, isAdmin: viewer.isAdmin });
 
   const openInstanceId = typeof params.open === "string" ? params.open : null;
-
-  if (!viewer) {
-    return <p>No team members have been set up yet.</p>;
-  }
 
   return (
     <MeetingApp

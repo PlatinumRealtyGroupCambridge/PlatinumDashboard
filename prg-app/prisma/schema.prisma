@@ -40,6 +40,31 @@ model User {
   color     String
   createdAt DateTime @default(now())
 
+  // --- per-user login & permissions ---
+  // Null until an admin sets a password for this person (see
+  // prisma/seed.ts and app/api/admin/users) — a user with no passwordHash
+  // cannot log in yet.
+  passwordHash String?
+
+  // Admins can log into the admin panel (app/(app)/admin/users), always
+  // see every KPI dashboard regardless of allowedSections, and always see
+  // every meeting series regardless of participation.
+  isAdmin Boolean @default(false)
+
+  // Which of the 7 KPI dashboards (lib/sections.ts DASHBOARD_SECTIONS ids,
+  // e.g. "financial", "leasing") this person is allowed to view. Ignored
+  // for admins. Meeting Management / To-Dos / Goals are not gated by this
+  // list — everyone with a login can use those (Meeting Management is
+  // separately scoped to each person's own meetings, see
+  // lib/get-meeting-data.ts).
+  allowedSections String[] @default([])
+
+  // Bumped whenever an admin resets this user's password (or the user is
+  // otherwise force-logged-out), so any session cookie signed before the
+  // bump is rejected on the next request even if it hasn't expired yet —
+  // see verifySession()/createUserSession() in lib/auth.ts.
+  sessionVersion Int @default(0)
+
   // 1-on-1 series where this user is the "owner" (the non-Tim participant),
   // used to label the series (e.g. "1-on-1: Matt")
   oneOnOneSeries MeetingSeries[] @relation("OneOnOneOwner")

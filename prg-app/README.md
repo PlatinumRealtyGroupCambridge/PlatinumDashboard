@@ -16,9 +16,11 @@ only manual work left, and they're both point-and-click in your browser.
   Leasing, Operations, Sales) as "coming soon" placeholders, ready to wire up
   to QuickBooks, Rentvine, and Aptly later
 - Your logo in the header and as the favicon
-- A shared site password gate for now (every team member uses the same
-  password to sign in) — this gets upgraded to individual "Sign in with
-  Google" logins in a later step, alongside the Google Chat bot
+- Individual logins for each team member (email + password, set up from the
+  Admin > Users page once you're signed in), with per-person control over
+  which of the 7 KPI dashboards they can see. Meeting Management always
+  shows a person only their own meetings and agendas — admins see
+  everything.
 
 ## Step 1 — Upload this folder to a new GitHub repository
 
@@ -39,15 +41,16 @@ only manual work left, and they're both point-and-click in your browser.
    |---|---|
    | `DATABASE_URL` | From Supabase: **Connect → ORMs → Prisma**, the line labeled "Transaction pooler" / `DATABASE_URL`. Copy it exactly. |
    | `DIRECT_URL` | Same Supabase screen, the "Direct connection" / `DIRECT_URL` line. Copy it exactly. |
-   | `SITE_PASSWORD` | Pick any password your team will use to sign in. You can change this later in Vercel's settings any time. |
    | `SESSION_SECRET` | `5baa231ad02c86a4c2c5213056ff4238ff439ed932b9d73770540cfaa57a13d6` (already generated for you — just paste this in) |
 
 3. Click **Deploy**. The build automatically creates the database tables and
    seeds your team roster and the 6 meeting series (the same ones from the
    prototype) — there's nothing else to run.
-4. Once it says "Ready," open the URL Vercel gives you, enter the
-   `SITE_PASSWORD` you chose, and you're in. Use the "Viewing as" switcher in
-   the top right to check what each team member sees.
+4. Once it says "Ready," open the URL Vercel gives you and sign in as
+   `tim@platinumrealtygroup.com` with the temporary password
+   `Platinum-CEO-2026!`. Go to **Admin > Users** in the sidebar right away to
+   change your own password and set one for everyone else on the team — no
+   one else can log in until you do.
 
 ## If a deploy ever fails
 
@@ -127,8 +130,3 @@ bot says and I'll help track it down.
 ## What's next
 
 - Wiring up QuickBooks Online, Rentvine, and Aptly for the other 7 dashboards
-- Google Cloud project setup for real "Sign in with Google" (replacing the
-  shared password) — this can reuse the same Google Cloud project as the
-  Chat bot above
-- Per-role viewing permissions (e.g. the property manager not seeing
-  financials)

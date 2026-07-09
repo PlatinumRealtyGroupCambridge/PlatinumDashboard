@@ -21,12 +21,20 @@ export default async function LoginPage({
         </div>
         <form method="POST" action="/api/login">
           <input type="hidden" name="next" value={next} />
-          {error && <div className="login-error">Incorrect password. Please try again.</div>}
+          {error && <div className="login-error">Incorrect email or password. Please try again.</div>}
+          <input
+            type="email"
+            name="email"
+            placeholder="Email address"
+            autoComplete="username"
+            autoFocus
+            required
+          />
           <input
             type="password"
             name="password"
-            placeholder="Site password"
-            autoFocus
+            placeholder="Password"
+            autoComplete="current-password"
             required
           />
           <button type="submit" className="btn primary">

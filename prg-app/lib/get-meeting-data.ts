@@ -3,8 +3,17 @@ import type { MeetingManagementData, MeetingRef } from "./meeting-types";
 
 // Fetches everything the Meeting Management client island needs in one
 // shot and serializes it to plain JSON-safe values (dates -> ISO strings).
-export async function getMeetingManagementData(): Promise<MeetingManagementData> {
-  const [users, series, tasks, goals] = await Promise.all([
+//
+// `viewer` scopes which meeting series come back: admins get every series,
+// everyone else only gets series they actually participate in. This is
+// filtered here (server-side, before anything is sent to the browser) —
+// not just hidden in the UI — because meeting series can carry private
+// 1-on-1 agenda notes that a non-participant shouldn't be able to see even
+// by inspecting the page's data.
+export async function getMeetingManagementData(
+  viewer: { id: string; isAdmin: boolean }
+): Promise<MeetingManagementData> {
+  const [users, allSeries, tasks, goals] = await Promise.all([
     prisma.user.findMany({ orderBy: { name: "asc" } }),
     prisma.meetingSeries.findMany({
       include: {
@@ -28,6 +37,10 @@ export async function getMeetingManagementData(): Promise<MeetingManagementData>
       },
     }),
   ]);
+
+  const series = viewer.isAdmin
+    ? allSeries
+    : allSeries.filter((s) => s.participants.some((p) => p.userId === viewer.id));
 
   const taskIdsByAgendaItem = new Map<string, string[]>();
   for (const t of tasks) {

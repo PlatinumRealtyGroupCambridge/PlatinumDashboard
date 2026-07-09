@@ -81,6 +81,9 @@ header.topbar {
 .brand .name { font-weight: 700; font-size: 16px; letter-spacing: -0.01em; color: var(--text-primary); }
 .brand .subname { font-size: 12.5px; color: var(--text-muted); }
 .topbar-right { display: flex; align-items: center; gap: 14px; }
+.current-user-chip { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.25; }
+.current-user-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.current-user-role { font-size: 11.5px; color: var(--text-muted); }
 .role-switch label { font-size: 12px; color: var(--text-muted); margin-right: 6px; }
 select {
   font-family: inherit;
@@ -440,10 +443,46 @@ tr.clickable-row:hover td { background: var(--page); }
   box-shadow: var(--shadow); padding: 32px 30px; width: 340px;
 }
 .login-card .brand { justify-content: center; margin-bottom: 18px; }
-.login-card input[type=password] {
+.login-card input[type=password], .login-card input[type=email] {
   width: 100%; font-family: inherit; font-size: 14px; padding: 10px 12px;
   border-radius: 8px; border: 1px solid var(--border); background: var(--page);
   color: var(--text-primary); margin-bottom: 12px;
 }
 .login-card .btn.primary { width: 100%; padding: 10px; font-size: 13.5px; }
 .login-error { color: var(--critical); font-size: 12.5px; margin-bottom: 10px; }
+
+/* Admin > Users */
+.admin-toolbar { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+.admin-form { padding: 18px 20px; }
+.admin-form-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px 16px; margin-bottom: 14px;
+}
+.admin-form-grid label {
+  display: flex; flex-direction: column; gap: 5px;
+  font-size: 11.5px; font-weight: 600; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.03em;
+}
+.admin-form-grid input[type=text], .admin-form-grid input[type=email] {
+  font-family: inherit; font-size: 13.5px; font-weight: 400; text-transform: none;
+  letter-spacing: normal; color: var(--text-primary);
+  padding: 8px 10px; border-radius: 7px; border: 1px solid var(--border);
+  background: var(--page);
+}
+.admin-admin-toggle {
+  display: flex; align-items: center; gap: 9px; font-size: 13px; color: var(--text-primary);
+  cursor: pointer; margin-bottom: 12px;
+}
+.section-checkbox-label {
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-muted); margin: 4px 0 6px;
+}
+.section-checkbox-grid { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.section-checkbox {
+  display: flex; align-items: center; gap: 9px; font-size: 13px; color: var(--text-primary);
+  background: none; border: none; padding: 3px 0; cursor: pointer; text-align: left;
+}
+.section-checkbox .dot { width: 8px; height: 8px; }
+.admin-form-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.admin-edit-panel { padding: 4px 0 12px; }
+

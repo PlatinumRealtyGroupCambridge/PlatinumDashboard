@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getCurrentViewer } from "@/lib/auth";
-import { ALL_SECTIONS, ZOOM_LINK } from "@/lib/sections";
+import { ALL_SECTIONS, DASHBOARD_SECTIONS, TEAM_SECTIONS, ZOOM_LINK } from "@/lib/sections";
 import ZoomJoinButton from "@/components/ZoomJoinButton";
 import LocalMeetingTime from "@/components/LocalMeetingTime";
 
@@ -12,6 +12,13 @@ export default async function HomePage() {
   if (!viewer) {
     return <p>No team members have been set up yet.</p>;
   }
+
+  // Same rule as the sidebar: admins see every KPI dashboard, everyone
+  // else only the ones checked off for them on Admin > Users. Meeting
+  // Management / To-Dos / Goals are always visible to anyone logged in.
+  const visibleSections = viewer.isAdmin
+    ? ALL_SECTIONS
+    : [...DASHBOARD_SECTIONS.filter((s) => viewer.allowedSections.includes(s.id)), ...TEAM_SECTIONS];
 
   const now = new Date();
 
@@ -71,7 +78,7 @@ export default async function HomePage() {
 
       <div className="section-label">Dashboards</div>
       <div className="dash-grid">
-        {ALL_SECTIONS.map((s) => (
+        {visibleSections.map((s) => (
           <Link key={s.id} href={s.href} className="card dash-card">
             <span className="dot" style={{ background: `var(--${s.color})` }} />
             <div style={{ flex: 1, minWidth: 0 }}>

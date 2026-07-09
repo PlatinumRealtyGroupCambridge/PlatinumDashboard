@@ -1,4 +1,5 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { getCurrentViewer } from "@/lib/auth";
 import { DASHBOARD_SECTIONS } from "@/lib/sections";
 
 export function generateStaticParams() {
@@ -13,6 +14,24 @@ export default async function ComingSoonPage({
   const { section: sectionId } = await params;
   const section = DASHBOARD_SECTIONS.find((s) => s.id === sectionId);
   if (!section) notFound();
+
+  const viewer = await getCurrentViewer();
+  if (!viewer) redirect("/login");
+
+  const allowed = viewer.isAdmin || viewer.allowedSections.includes(section.id);
+  if (!allowed) {
+    return (
+      <div>
+        <h1 className="page-title">{section.label}</h1>
+        <div className="card" style={{ padding: "40px 24px", textAlign: "center" }}>
+          <p style={{ color: "var(--text-muted)", fontSize: 13.5, margin: 0 }}>
+            You don&apos;t have access to this dashboard. Ask an admin to grant it to you on the
+            Admin &gt; Users page if you think this is a mistake.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>

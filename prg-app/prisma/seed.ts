@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import { randomBytes, scryptSync } from "crypto";
 
 const prisma = new PrismaClient();
 
@@ -7,6 +8,25 @@ const prisma = new PrismaClient();
 // maybeReseedSchedule() at the bottom). Sample tasks/goals are seeded
 // separately and are NOT affected by this version bump.
 const SCHEDULE_VERSION = "2";
+
+// Duplicated from lib/auth.ts's hashPassword() — this script runs
+// standalone via `tsx prisma/seed.ts` (see package.json), not inside a
+// Next.js request, so it can't import lib/auth.ts (that file pulls in
+// next/headers, which only works inside a Next server). Keep this in sync
+// with lib/auth.ts if the algorithm/params ever change, or a password set
+// by one won't verify against the other.
+const SCRYPT_KEYLEN = 64;
+function hashPassword(password: string): string {
+  const salt = randomBytes(16).toString("hex");
+  const hash = scryptSync(password, salt, SCRYPT_KEYLEN).toString("hex");
+  return `${salt}:${hash}`;
+}
+
+// Tim's very first login, before he's had a chance to set his own password
+// via Admin > Users. He should change it once he's in — everyone else
+// starts with no password at all (can't log in) until Tim sets one for
+// them from that same page.
+const TIM_INITIAL_PASSWORD = "Platinum-CEO-2026!";
 
 const TZ = "America/New_York";
 
@@ -105,10 +125,24 @@ async function main() {
 
   const users: Record<string, { id: string }> = {};
   for (const u of usersData) {
+    // isAdmin/passwordHash are intentionally only set in `create`, never
+    // in `update` — this upsert runs on every deploy (see package.json's
+    // build script), and update-ing them here would silently overwrite a
+    // password an admin has since set (or reset) from the Admin > Users
+    // page, or flip someone's admin status back to whatever it was at
+    // seed time. Everything else (name/role/initials/color) is fine to
+    // keep in sync with this file on every deploy.
     const created = await prisma.user.upsert({
       where: { email: u.email },
       update: { name: u.name, role: u.role, initials: u.initials, color: u.color },
-      create: { name: u.name, email: u.email, role: u.role, initials: u.initials, color: u.color },
+      create: {
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        initials: u.initials,
+        color: u.color,
+        ...(u.key === "tim" ? { isAdmin: true, passwordHash: hashPassword(TIM_INITIAL_PASSWORD) } : {}),
+      },
     });
     users[u.key] = created;
   }
