@@ -13,6 +13,7 @@ export const COLOR_CYCLE = [
   "series-red",
   "series-magenta",
   "series-orange",
+  "series-brown",
 ];
 
 export function colorForIndex(index: number) {

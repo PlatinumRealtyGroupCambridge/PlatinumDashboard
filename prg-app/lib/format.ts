@@ -16,6 +16,14 @@ export function formatDueDate(d: Date | null) {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
+export function formatCurrency(n: number) {
+  return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+}
+
+export function formatHours(n: number) {
+  return `${n.toLocaleString("en-US", { maximumFractionDigits: 1 })} hrs`;
+}
+
 export function initialsOf(name: string) {
   return name
     .split(" ")

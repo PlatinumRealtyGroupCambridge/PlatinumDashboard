@@ -7,7 +7,7 @@ export type Section = {
   href: string;
 };
 
-// The 7 KPI dashboards — one fixed categorical color slot each, assigned in
+// The 8 KPI dashboards — one fixed categorical color slot each, assigned in
 // order, never cycled.
 export const DASHBOARD_SECTIONS: Section[] = [
   {
@@ -59,6 +59,14 @@ export const DASHBOARD_SECTIONS: Section[] = [
     color: "series-magenta",
     blurb: "New business pipeline and closed deals.",
     href: "/sales",
+  },
+  {
+    id: "maintenance",
+    label: "Maintenance Dashboard",
+    color: "series-brown",
+    blurb: "Work order turnaround, labor billed, trip charges, and gas spend, from Rentvine and QuickBooks.",
+    live: true,
+    href: "/maintenance",
   },
 ];
 
