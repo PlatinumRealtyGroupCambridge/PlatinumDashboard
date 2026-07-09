@@ -123,30 +123,40 @@ async function main() {
     },
   ];
 
-  const users: Record<string, { id: string }> = {};
+  // isAdmin/passwordHash are deliberately never touched by this upsert
+  // (either branch) — this runs on every deploy (see package.json's build
+  // script), and update-ing them here would silently overwrite a password
+  // an admin has since set (or reset) from the Admin > Users page, or flip
+  // someone's admin status back to whatever it was at seed time.
+  // Everything else (name/role/initials/color) is fine to keep in sync
+  // with this file on every deploy.
+  const users: Record<string, { id: string; passwordHash: string | null }> = {};
   for (const u of usersData) {
-    // isAdmin/passwordHash are intentionally only set in `create`, never
-    // in `update` — this upsert runs on every deploy (see package.json's
-    // build script), and update-ing them here would silently overwrite a
-    // password an admin has since set (or reset) from the Admin > Users
-    // page, or flip someone's admin status back to whatever it was at
-    // seed time. Everything else (name/role/initials/color) is fine to
-    // keep in sync with this file on every deploy.
-    const created = await prisma.user.upsert({
+    const row = await prisma.user.upsert({
       where: { email: u.email },
       update: { name: u.name, role: u.role, initials: u.initials, color: u.color },
-      create: {
-        name: u.name,
-        email: u.email,
-        role: u.role,
-        initials: u.initials,
-        color: u.color,
-        ...(u.key === "tim" ? { isAdmin: true, passwordHash: hashPassword(TIM_INITIAL_PASSWORD) } : {}),
-      },
+      create: { name: u.name, email: u.email, role: u.role, initials: u.initials, color: u.color },
     });
-    users[u.key] = created;
+    users[u.key] = row;
   }
   console.log(`Seeded ${usersData.length} users.`);
+
+  // One-time bootstrap: give Tim's account a password and admin rights if
+  // it doesn't already have one. This is intentionally a separate step
+  // from the upsert above (not folded into its `create` branch) because
+  // Tim's row already existed from an earlier deploy, before passwordHash/
+  // isAdmin existed on the schema — the upsert above always took the
+  // `update` branch for him and so would never have run a `create`. Once
+  // this has set his password once, it's skipped forever after (even
+  // across a fresh empty database, this only ever fires the first time).
+  const tim = users["tim"];
+  if (tim && !tim.passwordHash) {
+    await prisma.user.update({
+      where: { id: tim.id },
+      data: { isAdmin: true, passwordHash: hashPassword(TIM_INITIAL_PASSWORD) },
+    });
+    console.log(`Bootstrapped tim@platinumrealtygroup.com with a temporary admin password.`);
+  }
 
   await maybeReseedSchedule(users);
   await seedSampleTasksAndGoals(users);
