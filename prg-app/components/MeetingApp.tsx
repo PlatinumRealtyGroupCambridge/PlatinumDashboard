@@ -2,7 +2,15 @@
 
 import { useState } from "react";
 import type { AgendaItemData, MeetingManagementData, SeriesData, TaskData, UserLite } from "@/lib/meeting-types";
-import { apiJson, fmtDate, fmtDueDate, fmtTime, monthLabel, useAutosave } from "@/lib/meeting-client-utils";
+import {
+  apiJson,
+  defaultDueDateInput,
+  fmtDate,
+  fmtDueDate,
+  fmtTime,
+  monthLabel,
+  useAutosave,
+} from "@/lib/meeting-client-utils";
 
 // ---------- component ----------
 
@@ -160,6 +168,20 @@ export default function MeetingApp({
     });
   }
 
+  async function createMeeting(input: {
+    title: string;
+    date: string;
+    time: string;
+    durationMins: number;
+    participantUserIds: string[];
+  }) {
+    const { series } = await apiJson("/api/meetings", "POST", input);
+    setData((d) => ({ ...d, series: [...d.series, series] }));
+    setShowNewMeetingForm(false);
+    setOpenMeeting({ seriesId: series.id, instanceId: series.instances[0].id });
+  }
+
+  const [showNewMeetingForm, setShowNewMeetingForm] = useState(false);
   const [openTaskFormFor, setOpenTaskFormFor] = useState<string | null>(null);
 
   async function createTaskFromAgendaItem(
@@ -234,8 +256,28 @@ export default function MeetingApp({
 
   return (
     <div>
-      <h1 className="page-title">Meeting Management</h1>
-      <p className="page-sub">Leadership &amp; team meetings and 1-on-1s, and their live agendas.</p>
+      <div className="detail-panel-header">
+        <div>
+          <h1 className="page-title">Meeting Management</h1>
+          <p className="page-sub" style={{ marginBottom: 0 }}>
+            Leadership &amp; team meetings and 1-on-1s, and their live agendas.
+          </p>
+        </div>
+        <button className="btn primary" onClick={() => setShowNewMeetingForm((v) => !v)}>
+          {showNewMeetingForm ? "Cancel" : "+ New meeting"}
+        </button>
+      </div>
+
+      {showNewMeetingForm && (
+        <NewMeetingForm
+          users={data.users}
+          currentUserId={currentUser}
+          onCreate={createMeeting}
+          onCancel={() => setShowNewMeetingForm(false)}
+        />
+      )}
+
+      <div style={{ marginTop: 22 }} />
 
       {calendarViewMode === "list" ? (
         <MeetingsList
@@ -315,6 +357,116 @@ function nextInstance(series: SeriesData) {
   const upcoming = series.instances.filter((i) => new Date(i.startsAt).getTime() >= now);
   if (upcoming.length) return upcoming[0];
   return series.instances[series.instances.length - 1];
+}
+
+// ---------- New one-off meeting ----------
+
+function NewMeetingForm({
+  users,
+  currentUserId,
+  onCreate,
+  onCancel,
+}: {
+  users: UserLite[];
+  currentUserId: string;
+  onCreate: (input: {
+    title: string;
+    date: string;
+    time: string;
+    durationMins: number;
+    participantUserIds: string[];
+  }) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [date, setDate] = useState("");
+  const [time, setTime] = useState("");
+  const [durationMins, setDurationMins] = useState(30);
+  const [participantIds, setParticipantIds] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const otherUsers = users.filter((u) => u.id !== currentUserId);
+
+  function toggleParticipant(id: string) {
+    setParticipantIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+  }
+
+  async function submit() {
+    if (!title.trim() || !date || !time) {
+      setError("Give the meeting a title, date, and time.");
+      return;
+    }
+    setError(null);
+    setSaving(true);
+    try {
+      await onCreate({ title: title.trim(), date, time, durationMins, participantUserIds: participantIds });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create the meeting.");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="card admin-form">
+      {error && <div className="login-error">{error}</div>}
+      <div className="admin-form-grid">
+        <label>
+          Title
+          <input
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="e.g. Vendor walkthrough"
+          />
+        </label>
+        <label>
+          Date
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        </label>
+        <label>
+          Time
+          <input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+        </label>
+        <label>
+          Duration
+          <select value={durationMins} onChange={(e) => setDurationMins(Number(e.target.value))}>
+            <option value={15}>15 min</option>
+            <option value={30}>30 min</option>
+            <option value={45}>45 min</option>
+            <option value={60}>1 hour</option>
+            <option value={90}>1.5 hours</option>
+            <option value={120}>2 hours</option>
+          </select>
+        </label>
+      </div>
+      <div className="section-checkbox-label">Who else is in this meeting? (you&apos;re always included)</div>
+      <div className="section-checkbox-grid">
+        {otherUsers.map((u) => {
+          const checked = participantIds.includes(u.id);
+          return (
+            <button
+              key={u.id}
+              type="button"
+              className={"section-checkbox" + (checked ? " checked" : "")}
+              onClick={() => toggleParticipant(u.id)}
+            >
+              <span className={"checkbox" + (checked ? " checked" : "")} />
+              {u.name} — {u.role}
+            </button>
+          );
+        })}
+      </div>
+      <div className="admin-form-actions">
+        <button type="button" className="btn primary" onClick={submit} disabled={saving}>
+          {saving ? "Creating…" : "Create meeting"}
+        </button>
+        <button type="button" className="btn" onClick={onCancel} disabled={saving}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
 }
 
 // ---------- Calendar view ----------
@@ -737,10 +889,4 @@ function TaskForm({
       </button>
     </div>
   );
-}
-
-function defaultDueDateInput() {
-  const d = new Date();
-  d.setDate(d.getDate() + 7);
-  return d.toISOString().slice(0, 10);
 }

@@ -37,7 +37,7 @@ export type InstanceData = {
 
 export type SeriesData = {
   id: string;
-  type: "ONE_ON_ONE" | "TEAM" | "OWNERSHIP";
+  type: "ONE_ON_ONE" | "TEAM" | "OWNERSHIP" | "ONE_OFF";
   name: string;
   durationMins: number;
   color: string;

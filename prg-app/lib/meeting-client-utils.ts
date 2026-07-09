@@ -88,8 +88,19 @@ export async function apiJson(url: string, method: string, body?: unknown) {
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
+    // API routes return JSON errors shaped like { error: "some message" }
+    // (see e.g. app/api/meetings/route.ts) — surface that message directly
+    // when present, since it's already written to be shown to a person,
+    // rather than the raw response body most callers don't display anyway.
     const text = await res.text().catch(() => "");
-    throw new Error(`${method} ${url} failed: ${res.status} ${text}`);
+    let message = text;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed.error === "string") message = parsed.error;
+    } catch {
+      // not JSON — fall back to the raw text below
+    }
+    throw new Error(message || `${method} ${url} failed: ${res.status}`);
   }
   return res.json();
 }

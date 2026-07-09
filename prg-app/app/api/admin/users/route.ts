@@ -2,22 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCurrentViewer, hashPassword } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { DASHBOARD_SECTIONS } from "@/lib/sections";
+import { colorForIndex } from "@/lib/colors";
 
 const VALID_SECTION_IDS = new Set(DASHBOARD_SECTIONS.map((s) => s.id));
-
-// Cycled through in creation order so new teammates get a readable,
-// distinct-ish color for their initials badge without an admin having to
-// pick one.
-const COLOR_CYCLE = [
-  "series-blue",
-  "series-aqua",
-  "series-yellow",
-  "series-green",
-  "series-violet",
-  "series-red",
-  "series-magenta",
-  "series-orange",
-];
 
 function initialsFor(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -71,7 +58,7 @@ export async function POST(req: NextRequest) {
       email,
       role,
       initials: initialsFor(name),
-      color: COLOR_CYCLE[userCount % COLOR_CYCLE.length],
+      color: colorForIndex(userCount),
       passwordHash: hashPassword(password),
       isAdmin,
       allowedSections,

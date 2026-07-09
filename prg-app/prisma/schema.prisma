@@ -16,6 +16,13 @@ enum MeetingType {
   ONE_ON_ONE
   TEAM
   OWNERSHIP
+  // A single one-time meeting rather than a recurring series — still
+  // modeled as a MeetingSeries with exactly one MeetingInstance, so it
+  // reuses all the same calendar/list rendering, agenda items, and
+  // Google Chat bot agenda-item support as every other meeting type. See
+  // app/api/meetings/route.ts (manual "+ New meeting" button) and
+  // lib/chat-bot.ts's create_meeting tool (chat-requested one-offs).
+  ONE_OFF
 }
 
 enum GoalStatus {
@@ -76,6 +83,28 @@ model User {
   goalsAssigned  Goal[]               @relation("GoalAssignee")
   goalsCreated   Goal[]               @relation("GoalCreatedBy")
   chatFollowUps  ChatFollowUp[]
+  chatMessages   ChatMessage[]
+}
+
+// A rolling window of recent Google Chat turns per person (both what they
+// said and what the bot replied), so the bot can follow a multi-message
+// back-and-forth instead of treating every incoming message as a
+// standalone request with no memory of what was just discussed. See
+// CONVERSATION_WINDOW_MINUTES in lib/chat-bot.ts for how far back this
+// looks, and getOrCreateNextInstance-style pruning that keeps this table
+// from growing unbounded (old rows are deleted once they age out of the
+// window). This is separate from ChatFollowUp below, which tracks one
+// specific structured fact (which exact task/goal a due-date question was
+// about) more reliably than free-text history can.
+model ChatMessage {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      String   // "user" | "assistant"
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
 }
 
 // Tracks a just-created task/goal that the Google Chat bot asked the sender
