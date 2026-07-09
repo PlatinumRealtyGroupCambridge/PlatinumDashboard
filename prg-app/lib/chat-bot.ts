@@ -212,11 +212,11 @@ const BASE_TOOLS = [
   {
     name: "add_agenda_item",
     description:
-      "Add a discussion item to the agenda of the sender's next upcoming occurrence of a meeting series. Only use a seriesId from the provided list of the sender's own meetings.",
+      "Add a discussion item to a meeting's agenda. Works identically for a recurring meeting series (adds to its next upcoming occurrence) and for a one-off meeting (adds directly to it, including one you just created with create_meeting earlier in this conversation) — both kinds appear together in the provided list and there's no difference in how you add to either. Only use an id from that list of the sender's own meetings.",
     input_schema: {
       type: "object" as const,
       properties: {
-        seriesId: { type: "string" as const, description: "id of the meeting series from the provided list" },
+        seriesId: { type: "string" as const, description: "id of the meeting (recurring or one-off) from the provided list" },
         title: TITLE_FIELD,
         notes: NOTES_FIELD,
       },
@@ -254,7 +254,7 @@ const BASE_TOOLS = [
   {
     name: "create_meeting",
     description:
-      "Schedule a brand-new one-off meeting (not a recurring series) with specific people, at a specific date and time. Only use this when the sender is clearly asking to set up/schedule a new meeting — for adding an item to an EXISTING meeting's agenda, use add_agenda_item instead.",
+      "Schedule a brand-new one-off (non-repeating) meeting with specific people, at a specific date and time. Only use this the FIRST time — when the meeting doesn't exist yet and the sender is asking to set one up. Once created, that meeting behaves exactly like any other meeting on the list: to add agenda items or discussion topics to it (now or in a later message), use add_agenda_item with its id, never create_meeting again for the same meeting.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -341,7 +341,7 @@ async function parseRequest(
 Today's date: ${today}
 Message sender: ${sender.name}
 ${pendingNote}${historyNote}
-Meetings ${sender.name} can add agenda items to (use these exact ids, and ONLY these — the sender cannot add items to meetings they don't attend):
+Meetings ${sender.name} can add agenda items to (use these exact ids, and ONLY these — the sender cannot add items to meetings they don't attend). This list mixes recurring meeting series and one-off meetings together — there is no distinction between the two for add_agenda_item, both work exactly the same way:
 ${mySeries.map((s) => `- ${s.id}: ${s.name}`).join("\n") || "(none)"}
 
 Team members tasks/goals/new meetings can involve (use these exact ids):
@@ -349,7 +349,7 @@ ${allUsers.map((u) => `- ${u.id}: ${u.name}`).join("\n")}
 
 Resolve relative dates (like "next Friday" or "in two weeks") to an actual YYYY-MM-DD date using today's date above — today's date and all meeting times are in Eastern time (America/New_York), which is also what create_meeting's "time" field means. If the message doesn't clearly map to adding an agenda item, task, goal, or new meeting, or references a meeting/person you can't confidently match from the lists above, call ask_for_clarification instead of guessing.
 
-New meetings (create_meeting) are separate, one-off events, not a request to add something to an existing meeting — "schedule a meeting with Matt about the roof repair" or "set up time with Phong and Jamie next week to go over leasing numbers" should use create_meeting, while "add to the team meeting: discuss the roof repair" should use add_agenda_item against the existing team meeting series. A new meeting needs a specific date AND time to be created — if the sender only gives one of those (or neither), call ask_for_clarification and ask for what's missing rather than guessing a time.
+Creating a meeting vs. adding to one that already exists: use create_meeting ONLY when the meeting doesn't exist yet — "schedule a meeting with Matt about the roof repair" or "set up time with Phong and Jamie next week to go over leasing numbers." Once a meeting exists — whether it's a long-running recurring series like the team meeting, or a one-off meeting created moments ago earlier in this same conversation — adding topics/details/notes to it (e.g. "for tomorrow's meeting with Matt, I also want to cover X") is add_agenda_item against that meeting's id from the list above, never create_meeting again. A new meeting needs a specific date AND time to be created — if the sender only gives one of those (or neither), call ask_for_clarification and ask for what's missing rather than guessing a time.
 
 Titles and notes: write a short, precise title — a few words, like a headline — rather than pasting the sender's whole message as the title. If their message has extra detail beyond what a short title can hold (context, specifics, reasoning), put that in the notes field, summarized or lightly cleaned up as needed rather than verbatim. Example: "create a video script on the cambridge rental market pricing" → title "Cambridge rental market pricing video script", with any extra detail from the message in notes.
 
