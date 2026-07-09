@@ -50,6 +50,24 @@ model User {
   tasksCreated   Task[]               @relation("TaskCreatedBy")
   goalsAssigned  Goal[]               @relation("GoalAssignee")
   goalsCreated   Goal[]               @relation("GoalCreatedBy")
+  chatFollowUps  ChatFollowUp[]
+}
+
+// Tracks a just-created task/goal that the Google Chat bot asked the sender
+// a follow-up question about (e.g. "did you want to give this a due
+// date?"), so that if their next message just answers the question (e.g.
+// "next Friday", "no rush") the bot can apply it to that item instead of
+// creating a confusing new one. Cleared once resolved, replaced whenever a
+// newer item is created, and ignored by the bot once it's more than 30
+// minutes old.
+model ChatFollowUp {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  itemType  String   // "task" | "goal"
+  itemId    String
+  itemTitle String
+  createdAt DateTime @default(now())
 }
 
 model MeetingSeries {

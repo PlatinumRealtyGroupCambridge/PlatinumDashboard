@@ -30,15 +30,40 @@ export async function POST(req: NextRequest) {
   // safe to remove once messages are confirmed working end-to-end.
   console.log("Google Chat event received:", JSON.stringify(event).slice(0, 4000));
 
+  // Google sends events in one of two shapes (see lib/chat-bot.ts's
+  // normalizeEvent for the input side), and expects the REPLY in the
+  // matching shape too. This app's events arrive as the newer "common
+  // event object" (a top-level "chat" key) — that format requires the
+  // reply wrapped in hostAppDataAction.chatDataAction.createMessageAction,
+  // NOT the simple {"text": "..."} shape the classic format uses. A plain
+  // {"text"} reply to a "chat"-shaped event is silently ignored by Google
+  // Chat, which is why the bot appeared to "not respond" even though it
+  // was creating tasks/goals successfully server-side.
+  const usesCommonEventObjectFormat = Boolean(event?.chat);
+
+  function replyJson(text: string) {
+    if (!text) return NextResponse.json({});
+    if (usesCommonEventObjectFormat) {
+      return NextResponse.json({
+        hostAppDataAction: {
+          chatDataAction: {
+            createMessageAction: { message: { text } },
+          },
+        },
+      });
+    }
+    return NextResponse.json({ text });
+  }
+
   try {
     const text = await handleChatMessage(event);
     console.log("Google Chat reply text:", JSON.stringify(text));
-    return NextResponse.json(text ? { text } : {});
+    return replyJson(text);
   } catch (err) {
     console.error("Error handling Google Chat message:", err);
-    return NextResponse.json({
-      text: "Something went wrong on my end handling that — try again in a moment, or let Tim know if it keeps happening.",
-    });
+    return replyJson(
+      "Something went wrong on my end handling that — try again in a moment, or let Tim know if it keeps happening."
+    );
   }
 }
 
