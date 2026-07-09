@@ -12,7 +12,7 @@ export type Section = {
 export const DASHBOARD_SECTIONS: Section[] = [
   {
     id: "ceo",
-    label: "CEO Dashboard",
+    label: "Tim Dashboard",
     color: "series-blue",
     blurb:
       "A roll-up view across finance, marketing, leasing, operations, and sales — the numbers that matter most across the whole company.",
