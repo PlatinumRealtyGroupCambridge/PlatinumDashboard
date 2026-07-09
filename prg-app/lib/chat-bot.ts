@@ -3,15 +3,59 @@ import { anthropic, CHAT_BOT_MODEL } from "./anthropic";
 import { getOrCreateNextInstance } from "./meetings-server";
 
 // Loosely typed — Google Chat's event payload has more fields than this,
-// we only read what we need. See:
-// https://developers.google.com/workspace/chat/api/reference/rest/v1/HttpBody
+// we only read what we need. Google Chat apps can receive events in either
+// of two shapes depending on how the app is configured:
+//   - Classic shape: a flat object with top-level "type" ("MESSAGE" /
+//     "ADDED_TO_SPACE" / ...), "message", and "user" fields. See
+//     https://developers.google.com/workspace/chat/api/reference/rest/v1/HttpBody
+//   - Common event object shape (Workspace Add-ons framework, which is what
+//     this app is actually configured under — see the Configuration page
+//     migration note in google-chat-auth.ts): everything lives under a
+//     top-level "chat" object, e.g. "chat.messagePayload.message.text" for
+//     the message text and "chat.user" for the sender, with
+//     "chat.addedToSpacePayload" present instead when the app is newly
+//     added to a space. See
+//     https://developers.google.com/workspace/add-ons/concepts/event-objects
+// normalizeEvent() below converts either shape into one common shape the
+// rest of this file works with.
 type ChatSender = { email?: string; displayName?: string; name?: string };
 type ChatEvent = {
-  type?: string; // "MESSAGE" | "ADDED_TO_SPACE" | "REMOVED_FROM_SPACE" | ...
+  // classic shape
+  type?: string;
   message?: { text?: string; argumentText?: string; sender?: ChatSender };
   user?: ChatSender;
-  space?: { displayName?: string; type?: string };
+  // common event object shape
+  chat?: {
+    user?: ChatSender;
+    messagePayload?: { message?: { text?: string; argumentText?: string; sender?: ChatSender } };
+    addedToSpacePayload?: unknown;
+  };
 };
+
+type NormalizedEvent =
+  | { kind: "ADDED_TO_SPACE" }
+  | { kind: "MESSAGE"; text: string; sender?: ChatSender }
+  | { kind: "OTHER" };
+
+function normalizeEvent(event: ChatEvent): NormalizedEvent {
+  if (event.chat) {
+    if (event.chat.addedToSpacePayload) return { kind: "ADDED_TO_SPACE" };
+    if (event.chat.messagePayload) {
+      const msg = event.chat.messagePayload.message;
+      const text = (msg?.argumentText ?? msg?.text ?? "").trim();
+      const sender = event.chat.user ?? msg?.sender;
+      return { kind: "MESSAGE", text, sender };
+    }
+    return { kind: "OTHER" };
+  }
+  if (event.type === "ADDED_TO_SPACE") return { kind: "ADDED_TO_SPACE" };
+  if (event.type === "MESSAGE") {
+    const text = (event.message?.argumentText ?? event.message?.text ?? "").trim();
+    const sender = event.message?.sender ?? event.user;
+    return { kind: "MESSAGE", text, sender };
+  }
+  return { kind: "OTHER" };
+}
 
 const GREETING =
   "Hi! I'm the Platinum Realty assistant. Message me things like:\n" +
@@ -20,21 +64,22 @@ const GREETING =
   '• "Add a goal for Phong: finalize the QBO integration by end of August"\n' +
   "I can only add agenda items to meetings you're part of, but tasks and goals can go to anyone on the team.";
 
-export async function handleChatMessage(event: ChatEvent): Promise<string> {
-  console.log("handleChatMessage: event.type =", event.type);
-  if (event.type === "ADDED_TO_SPACE") {
+export async function handleChatMessage(rawEvent: ChatEvent): Promise<string> {
+  const event = normalizeEvent(rawEvent);
+  console.log("handleChatMessage: normalized kind =", event.kind);
+  if (event.kind === "ADDED_TO_SPACE") {
     return GREETING;
   }
-  if (event.type !== "MESSAGE") {
-    console.log("handleChatMessage: unrecognized event.type, returning empty reply");
+  if (event.kind !== "MESSAGE") {
+    console.log("handleChatMessage: unrecognized event kind, returning empty reply");
     return "";
   }
 
-  const rawText = (event.message?.argumentText ?? event.message?.text ?? "").trim();
+  const rawText = event.text;
   console.log("handleChatMessage: rawText =", JSON.stringify(rawText));
   if (!rawText) return GREETING;
 
-  const sender = event.message?.sender ?? event.user;
+  const sender = event.sender;
   console.log("handleChatMessage: sender =", JSON.stringify(sender));
   const user = await resolveSender(sender);
   console.log("handleChatMessage: resolved user =", user ? `${user.id} (${user.name})` : "none");
