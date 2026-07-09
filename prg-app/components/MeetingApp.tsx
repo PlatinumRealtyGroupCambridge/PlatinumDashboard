@@ -71,6 +71,23 @@ export default function MeetingApp({
     await apiJson(`/api/agenda-items/${item.id}`, "PATCH", { notes }).catch(() => {});
   }
 
+  async function deleteAgendaItem(item: AgendaItemData) {
+    const snapshot = data;
+    setData((d) => ({
+      ...d,
+      series: d.series.map((s) => ({
+        ...s,
+        instances: s.instances.map((inst) => ({
+          ...inst,
+          agendaItems: inst.agendaItems.filter((a) => a.id !== item.id),
+        })),
+      })),
+    }));
+    await apiJson(`/api/agenda-items/${item.id}`, "DELETE").catch(() => {
+      setData(snapshot);
+    });
+  }
+
   async function addAgendaItem(instanceId: string, title: string) {
     const { item } = await apiJson("/api/agenda-items", "POST", {
       instanceId,
@@ -204,6 +221,7 @@ export default function MeetingApp({
           onSaveNotes={saveAgendaNotes}
           onAddAgendaItem={(title) => addAgendaItem(instance.id, title)}
           onTable={tableToNextMeeting}
+          onDelete={deleteAgendaItem}
           openTaskFormFor={openTaskFormFor}
           setOpenTaskFormFor={setOpenTaskFormFor}
           onCreateTask={createTaskFromAgendaItem}
@@ -475,6 +493,7 @@ function LiveMeeting({
   onSaveNotes,
   onAddAgendaItem,
   onTable,
+  onDelete,
   openTaskFormFor,
   setOpenTaskFormFor,
   onCreateTask,
@@ -490,6 +509,7 @@ function LiveMeeting({
   onSaveNotes: (item: AgendaItemData, notes: string) => void;
   onAddAgendaItem: (title: string) => void;
   onTable: (item: AgendaItemData) => void;
+  onDelete: (item: AgendaItemData) => void;
   openTaskFormFor: string | null;
   setOpenTaskFormFor: (id: string | null) => void;
   onCreateTask: (item: AgendaItemData, title: string, assigneeId: string, dueDate: string) => void;
@@ -540,6 +560,7 @@ function LiveMeeting({
             onToggleDiscussed={onToggleDiscussed}
             onSaveNotes={onSaveNotes}
             onTable={onTable}
+            onDelete={onDelete}
             showTaskForm={openTaskFormFor === a.id}
             onToggleTaskForm={() => setOpenTaskFormFor(openTaskFormFor === a.id ? null : a.id)}
             onCreateTask={onCreateTask}
@@ -584,6 +605,7 @@ function AgendaItemCard({
   onToggleDiscussed,
   onSaveNotes,
   onTable,
+  onDelete,
   showTaskForm,
   onToggleTaskForm,
   onCreateTask,
@@ -595,6 +617,7 @@ function AgendaItemCard({
   onToggleDiscussed: (item: AgendaItemData) => void;
   onSaveNotes: (item: AgendaItemData, notes: string) => void;
   onTable: (item: AgendaItemData) => void;
+  onDelete: (item: AgendaItemData) => void;
   showTaskForm: boolean;
   onToggleTaskForm: () => void;
   onCreateTask: (item: AgendaItemData, title: string, assigneeId: string, dueDate: string) => void;
@@ -602,6 +625,7 @@ function AgendaItemCard({
   tasksById: (id: string) => TaskData | undefined;
 }) {
   const [notes, setNotes] = useState(item.notes);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const addedBy = userById(item.addedById);
   const linkedTasks = item.taskIds.map(tasksById).filter(Boolean) as TaskData[];
 
@@ -643,6 +667,21 @@ function AgendaItemCard({
             <button className="btn ghost-danger" onClick={() => onTable(item)}>
               Table to next meeting
             </button>
+            {!confirmingDelete ? (
+              <button className="btn ghost-danger" onClick={() => setConfirmingDelete(true)}>
+                Delete
+              </button>
+            ) : (
+              <>
+                <span className="owner-chip">Delete this agenda item?</span>
+                <button className="btn ghost-danger" onClick={() => onDelete(item)}>
+                  Yes, delete
+                </button>
+                <button className="btn" onClick={() => setConfirmingDelete(false)}>
+                  Cancel
+                </button>
+              </>
+            )}
           </div>
 
           {showTaskForm && (
