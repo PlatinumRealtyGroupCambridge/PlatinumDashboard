@@ -1,8 +1,9 @@
 import { prisma } from "./prisma";
 import { anthropic, CHAT_BOT_MODEL } from "./anthropic";
-import { getOrCreateNextInstance } from "./meetings-server";
+import { getOrCreateNextInstance, findUpcomingInstance, deleteMeetingInstance } from "./meetings-server";
 import { colorForIndex } from "./colors";
 import { nyTodayISO, zonedTimeToUtc } from "./timezone";
+import { recomputeGoalCompletion } from "./goal-progress";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -69,7 +70,8 @@ const GREETING =
   '• "Add a task for Jamie: draft the new sign-on packet, due next Friday"\n' +
   '• "Add a goal for Phong: finalize the QBO integration by end of August"\n' +
   '• "Schedule a meeting with Matt and Phong next Tuesday at 2pm about the vendor contract"\n' +
-  "I can only add agenda items to meetings you're part of, but tasks, goals, and new meetings can involve anyone on the team.";
+  '• "Cancel my 1-on-1 with Matt this week"\n' +
+  "I can only add to or cancel meetings you're part of, but tasks, goals, and new meetings can involve anyone on the team.";
 
 // How long a "did you want to give this a due date?" follow-up stays live
 // waiting for an answer before we stop trying to match a later message to
@@ -120,12 +122,15 @@ export async function handleChatMessage(rawEvent: ChatEvent): Promise<string> {
 
   const followUpCutoff = new Date(Date.now() - FOLLOW_UP_WINDOW_MINUTES * 60 * 1000);
   const conversationCutoff = new Date(Date.now() - CONVERSATION_WINDOW_MINUTES * 60 * 1000);
-  const [mySeries, allUsers, pendingFollowUp, recentTurnsDesc] = await Promise.all([
+  const [mySeries, allUsers, activeGoals, pendingFollowUp, recentTurnsDesc] = await Promise.all([
     prisma.meetingSeries.findMany({
       where: { participants: { some: { userId: user.id } } },
       orderBy: { name: "asc" },
     }),
     prisma.user.findMany({ orderBy: { name: "asc" } }),
+    // Archived goals are already achieved/closed out — not sensible targets
+    // for a brand new sub-task, so they're left off this list entirely.
+    prisma.goal.findMany({ where: { archived: false }, orderBy: { title: "asc" } }),
     prisma.chatFollowUp.findFirst({
       where: { userId: user.id, createdAt: { gte: followUpCutoff } },
       orderBy: { createdAt: "desc" },
@@ -141,7 +146,7 @@ export async function handleChatMessage(rawEvent: ChatEvent): Promise<string> {
     .reverse()
     .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
 
-  const action = await parseRequest(rawText, user, mySeries, allUsers, pendingFollowUp, conversationHistory);
+  const action = await parseRequest(rawText, user, mySeries, allUsers, activeGoals, pendingFollowUp, conversationHistory);
   const reply = await executeAction(action, user, pendingFollowUp);
 
   // Remember this exchange for next time, and forget anything that's aged
@@ -183,7 +188,7 @@ async function resolveSender(sender?: ChatSender) {
 
 type ParsedAction =
   | { tool: "add_agenda_item"; seriesId: string; title: string; notes?: string }
-  | { tool: "add_task"; assigneeUserId: string; title: string; dueDate?: string; notes?: string }
+  | { tool: "add_task"; assigneeUserId: string; title: string; dueDate?: string; notes?: string; goalId?: string }
   | { tool: "add_goal"; assigneeUserId: string; title: string; dueDate?: string; notes?: string }
   | { tool: "set_due_date_on_pending_item"; dueDate?: string }
   | {
@@ -194,6 +199,7 @@ type ParsedAction =
       time: string;
       durationMins?: number;
     }
+  | { tool: "delete_meeting"; seriesId: string }
   | { tool: "small_talk"; reply: string }
   | { tool: "ask_for_clarification"; question: string };
 
@@ -225,7 +231,8 @@ const BASE_TOOLS = [
   },
   {
     name: "add_task",
-    description: "Create a to-do / task assigned to a team member.",
+    description:
+      "Create a to-do / task assigned to a team member. If the sender says this task belongs under, is part of, or is toward a specific goal (e.g. \"add a task under the Phase 1 goal\", \"for the CRM rollout goal, add...\"), set goalId so it's tracked as a sub-task of that goal (counts toward its progress bar) instead of a standalone task — match it against the provided goals list, don't guess an id that isn't on it.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -233,6 +240,11 @@ const BASE_TOOLS = [
         title: TITLE_FIELD,
         notes: NOTES_FIELD,
         dueDate: { type: "string" as const, description: "ISO date YYYY-MM-DD if a due date was mentioned; omit otherwise" },
+        goalId: {
+          type: "string" as const,
+          description:
+            "id of the goal from the provided goals list, ONLY if the sender explicitly said this task belongs under/for/as part of that specific goal. Omit entirely for a standalone task not tied to any goal — don't attach one just because a goal with a similar topic exists.",
+        },
       },
       required: ["assigneeUserId", "title"],
     },
@@ -280,9 +292,21 @@ const BASE_TOOLS = [
     },
   },
   {
+    name: "delete_meeting",
+    description:
+      "Cancel/delete a meeting from the calendar. For a one-off meeting this removes it entirely. For a recurring series (like the weekly team meeting or a 1-on-1), this cancels just its next upcoming occurrence — the series itself keeps going on its normal schedule afterward, this only skips the one date. Only use this when the sender clearly asks to cancel, delete, or remove a specific meeting they're part of — never guess.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        seriesId: { type: "string" as const, description: "id of the meeting (recurring or one-off) from the provided list" },
+      },
+      required: ["seriesId"],
+    },
+  },
+  {
     name: "ask_for_clarification",
     description:
-      "Use this when the sender is asking for an action (adding something, scheduling something) but it's ambiguous, doesn't clearly map to a known meeting or person, or isn't something you can do (only add_agenda_item / add_task / add_goal / create_meeting are supported). Do NOT use this for a plain greeting, thanks, or acknowledgment with no request — use small_talk for those instead.",
+      "Use this when the sender is asking for an action (adding something, scheduling something, canceling something) but it's ambiguous, doesn't clearly map to a known meeting or person, or isn't something you can do (only add_agenda_item / add_task / add_goal / create_meeting / delete_meeting are supported). Do NOT use this for a plain greeting, thanks, or acknowledgment with no request — use small_talk for those instead.",
     input_schema: {
       type: "object" as const,
       properties: { question: { type: "string" as const } },
@@ -326,6 +350,7 @@ async function parseRequest(
   sender: { id: string; name: string },
   mySeries: { id: string; name: string }[],
   allUsers: { id: string; name: string }[],
+  activeGoals: { id: string; title: string }[],
   pendingFollowUp: PendingFollowUp,
   conversationHistory: { role: "user" | "assistant"; content: string }[]
 ): Promise<ParsedAction> {
@@ -341,15 +366,18 @@ async function parseRequest(
 Today's date: ${today}
 Message sender: ${sender.name}
 ${pendingNote}${historyNote}
-Meetings ${sender.name} can add agenda items to (use these exact ids, and ONLY these — the sender cannot add items to meetings they don't attend). This list mixes recurring meeting series and one-off meetings together — there is no distinction between the two for add_agenda_item, both work exactly the same way:
+Meetings ${sender.name} can add agenda items to or cancel (use these exact ids, and ONLY these — the sender cannot add to or cancel meetings they don't attend). This list mixes recurring meeting series and one-off meetings together — there is no distinction between the two for add_agenda_item or delete_meeting, both work exactly the same way on either kind:
 ${mySeries.map((s) => `- ${s.id}: ${s.name}`).join("\n") || "(none)"}
 
 Team members tasks/goals/new meetings can involve (use these exact ids):
 ${allUsers.map((u) => `- ${u.id}: ${u.name}`).join("\n")}
 
-Resolve relative dates (like "next Friday" or "in two weeks") to an actual YYYY-MM-DD date using today's date above — today's date and all meeting times are in Eastern time (America/New_York), which is also what create_meeting's "time" field means. If the message doesn't clearly map to adding an agenda item, task, goal, or new meeting, or references a meeting/person you can't confidently match from the lists above, call ask_for_clarification instead of guessing.
+Active goals a new task can be attached to as a sub-task, if the sender says the task belongs under one of these (use these exact ids with add_task's goalId field — see its description; don't attach a task to a goal unless the sender actually referenced that goal):
+${activeGoals.map((g) => `- ${g.id}: ${g.title}`).join("\n") || "(none)"}
 
-Creating a meeting vs. adding to one that already exists: use create_meeting ONLY when the meeting doesn't exist yet — "schedule a meeting with Matt about the roof repair" or "set up time with Phong and Jamie next week to go over leasing numbers." Once a meeting exists — whether it's a long-running recurring series like the team meeting, or a one-off meeting created moments ago earlier in this same conversation — adding topics/details/notes to it (e.g. "for tomorrow's meeting with Matt, I also want to cover X") is add_agenda_item against that meeting's id from the list above, never create_meeting again. A new meeting needs a specific date AND time to be created — if the sender only gives one of those (or neither), call ask_for_clarification and ask for what's missing rather than guessing a time.
+Resolve relative dates (like "next Friday" or "in two weeks") to an actual YYYY-MM-DD date using today's date above — today's date and all meeting times are in Eastern time (America/New_York), which is also what create_meeting's "time" field means. If the message doesn't clearly map to adding an agenda item, task, goal, new meeting, or canceling a meeting, or references a meeting/person you can't confidently match from the lists above, call ask_for_clarification instead of guessing.
+
+Creating a meeting vs. adding to one that already exists vs. canceling one: use create_meeting ONLY when the meeting doesn't exist yet — "schedule a meeting with Matt about the roof repair" or "set up time with Phong and Jamie next week to go over leasing numbers." Once a meeting exists — whether it's a long-running recurring series like the team meeting, or a one-off meeting created moments ago earlier in this same conversation — adding topics/details/notes to it (e.g. "for tomorrow's meeting with Matt, I also want to cover X") is add_agenda_item against that meeting's id from the list above, never create_meeting again. If instead the sender wants it gone — "cancel," "delete," "remove," "we don't need to meet this week" — that's delete_meeting against that same id. A new meeting needs a specific date AND time to be created — if the sender only gives one of those (or neither), call ask_for_clarification and ask for what's missing rather than guessing a time.
 
 Titles and notes: write a short, precise title — a few words, like a headline — rather than pasting the sender's whole message as the title. If their message has extra detail beyond what a short title can hold (context, specifics, reasoning), put that in the notes field, summarized or lightly cleaned up as needed rather than verbatim. Example: "create a video script on the cambridge rental market pricing" → title "Cambridge rental market pricing video script", with any extra detail from the message in notes.
 
@@ -387,6 +415,7 @@ If the message is just a greeting, thanks, acknowledgment ("ok", "sounds good", 
         title: String(input.title),
         dueDate: typeof input.dueDate === "string" ? input.dueDate : undefined,
         notes: typeof input.notes === "string" ? input.notes : undefined,
+        goalId: typeof input.goalId === "string" && input.goalId ? input.goalId : undefined,
       };
     case "add_goal":
       return {
@@ -411,6 +440,11 @@ If the message is just a greeting, thanks, acknowledgment ("ok", "sounds good", 
         date: String(input.date),
         time: String(input.time),
         durationMins: typeof input.durationMins === "number" ? input.durationMins : undefined,
+      };
+    case "delete_meeting":
+      return {
+        tool: "delete_meeting",
+        seriesId: String(input.seriesId),
       };
     case "small_talk":
       return {
@@ -550,10 +584,43 @@ async function executeAction(
     return `${pick(ACK_OPENERS)} Scheduled "${action.title}"${withWho} for ${whenStr} at ${timeStr} ET. Everyone included will see it on the Meeting Management calendar.`;
   }
 
+  if (action.tool === "delete_meeting") {
+    await clearPendingFollowUps(sender.id);
+    const series = await prisma.meetingSeries.findUnique({
+      where: { id: action.seriesId },
+      include: { participants: true },
+    });
+    if (!series || !series.participants.some((p) => p.userId === sender.id)) {
+      return "Hmm, I couldn't cancel that — that doesn't look like one of your meetings.";
+    }
+    const instance = await findUpcomingInstance(series.id);
+    if (!instance) {
+      return `I couldn't find an upcoming occurrence of "${series.name}" to cancel.`;
+    }
+    const whenStr = instance.startsAt.toLocaleDateString("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      timeZone: "America/New_York",
+    });
+    await deleteMeetingInstance(instance.id);
+    const followUp = series.type === "ONE_OFF" ? "" : " The recurring meeting will continue as normal after that.";
+    return `Done — I removed "${series.name}" on ${whenStr} from the calendar.${followUp}`;
+  }
+
   if (action.tool === "add_task") {
     await clearPendingFollowUps(sender.id);
     const assignee = await prisma.user.findUnique({ where: { id: action.assigneeUserId } });
     if (!assignee) return "I couldn't find that team member to assign the task to — could you double check the name?";
+
+    let goal: { id: string; title: string } | null = null;
+    if (action.goalId) {
+      goal = await prisma.goal.findUnique({ where: { id: action.goalId }, select: { id: true, title: true } });
+      if (!goal) {
+        return "I couldn't find that goal to attach the task to — could you double check its name?";
+      }
+    }
+
     const firstName = assignee.name.split(" ")[0];
     const task = await prisma.task.create({
       data: {
@@ -562,16 +629,25 @@ async function executeAction(
         assigneeId: assignee.id,
         dueDate: action.dueDate ? new Date(action.dueDate) : null,
         createdById: sender.id,
+        goalId: goal?.id ?? null,
       },
     });
+    // A freshly-added sub-task starts un-done — if the goal had previously
+    // been fully completed (every other sub-task done), this un-completes
+    // it again, same as the "+ Add task" form on the Goals page itself
+    // (see app/api/tasks/route.ts).
+    if (goal) {
+      await recomputeGoalCompletion(goal.id);
+    }
     const noteAside = action.notes ? " I added the extra details to its notes." : "";
+    const goalAside = goal ? ` under the goal "${goal.title}"` : "";
     if (action.dueDate) {
-      return `${pick(ACK_OPENERS)} Added a task for ${firstName}: "${action.title}" — due ${formatDueDate(action.dueDate)}.${noteAside}`;
+      return `${pick(ACK_OPENERS)} Added a task for ${firstName}${goalAside}: "${action.title}" — due ${formatDueDate(action.dueDate)}.${noteAside}`;
     }
     await prisma.chatFollowUp.create({
       data: { userId: sender.id, itemType: "task", itemId: task.id, itemTitle: action.title },
     });
-    return `${pick(ACK_OPENERS)} I added a task for ${firstName}: "${action.title}".${noteAside} Did you want to give ${firstName} a deadline for this? Just tell me the date, or say "no rush" if not.`;
+    return `${pick(ACK_OPENERS)} I added a task for ${firstName}${goalAside}: "${action.title}".${noteAside} Did you want to give ${firstName} a deadline for this? Just tell me the date, or say "no rush" if not.`;
   }
 
   if (action.tool === "add_goal") {

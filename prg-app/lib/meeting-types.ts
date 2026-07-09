@@ -78,6 +78,18 @@ export type GoalData = {
   subtasks: TaskData[];
 };
 
+// Admin-only "Meeting Efficiency" attendance record for one participant on
+// one meeting instance. Fetched separately from the rest of
+// MeetingManagementData (see AttendancePanel in components/MeetingApp.tsx)
+// rather than embedded in every instance, since only admins ever need it
+// and most instances will never be opened by an admin at all.
+export type AttendanceRow = {
+  userId: string;
+  status: "PRESENT" | "LATE" | "ABSENT" | null;
+  prepared: boolean | null;
+  focused: boolean | null;
+};
+
 export type MeetingManagementData = {
   users: UserLite[];
   series: SeriesData[];

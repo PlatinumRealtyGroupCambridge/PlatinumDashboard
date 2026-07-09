@@ -128,8 +128,11 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
   // added, aren't deleted — they just become unassigned/unattributed
   // (those fields are already optional). Their meeting participation rows
   // are removed since MeetingParticipant.userId is required and can't be
-  // left dangling. ChatFollowUp rows cascade-delete automatically at the
-  // database level (see schema.prisma).
+  // left dangling. Any Meeting Efficiency rows they marked as an admin keep
+  // existing (it's the attendee's record, not the marking admin's) but lose
+  // the "marked by" attribution. ChatFollowUp/ChatMessage rows, and this
+  // person's own MeetingAttendance rows as an attendee, cascade-delete
+  // automatically at the database level (see schema.prisma).
   await prisma.$transaction([
     prisma.task.updateMany({ where: { assigneeId: id }, data: { assigneeId: null } }),
     prisma.task.updateMany({ where: { createdById: id }, data: { createdById: null } }),
@@ -137,6 +140,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     prisma.goal.updateMany({ where: { createdById: id }, data: { createdById: null } }),
     prisma.agendaItem.updateMany({ where: { addedById: id }, data: { addedById: null } }),
     prisma.meetingSeries.updateMany({ where: { ownerId: id }, data: { ownerId: null } }),
+    prisma.meetingAttendance.updateMany({ where: { markedById: id }, data: { markedById: null } }),
     prisma.meetingParticipant.deleteMany({ where: { userId: id } }),
     prisma.user.delete({ where: { id } }),
   ]);

@@ -50,10 +50,17 @@ export default function Sidebar({
           <div className="sidebar-label">Admin</div>
           <Link
             href="/admin/users"
-            className={"sidebar-item" + (pathname.startsWith("/admin") ? " active" : "")}
+            className={"sidebar-item" + (pathname.startsWith("/admin/users") ? " active" : "")}
           >
             <span className="dot" style={{ background: "var(--text-muted)", width: 8, height: 8, borderRadius: "50%" }} />
             <span>Manage Users</span>
+          </Link>
+          <Link
+            href="/admin/meeting-efficiency"
+            className={"sidebar-item" + (pathname.startsWith("/admin/meeting-efficiency") ? " active" : "")}
+          >
+            <span className="dot" style={{ background: "var(--text-muted)", width: 8, height: 8, borderRadius: "50%" }} />
+            <span>Meeting Efficiency</span>
           </Link>
         </>
       )}

@@ -23,6 +23,7 @@ export default async function MeetingsPage({
     <MeetingApp
       initialData={data}
       currentUserId={viewer.id}
+      isAdmin={viewer.isAdmin}
       zoomLink={ZOOM_LINK}
       initialOpenInstanceId={openInstanceId}
     />

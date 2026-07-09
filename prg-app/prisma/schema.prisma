@@ -31,6 +31,12 @@ enum GoalStatus {
   CRIT
 }
 
+enum AttendanceStatus {
+  PRESENT
+  LATE
+  ABSENT
+}
+
 // Simple key/value store for one-off app bookkeeping — currently used to
 // gate a one-time re-seed of the meeting schedule (see prisma/seed.ts).
 model AppMeta {
@@ -84,6 +90,14 @@ model User {
   goalsCreated   Goal[]               @relation("GoalCreatedBy")
   chatFollowUps  ChatFollowUp[]
   chatMessages   ChatMessage[]
+
+  // Admin-only "Meeting Efficiency" tracking — see MeetingAttendance below.
+  // meetingAttendance is this person's own record as an attendee;
+  // meetingAttendanceMarked is the set of records some admin (possibly a
+  // different admin, or themselves) filled in while they happened to be
+  // logged in as this admin.
+  meetingAttendance       MeetingAttendance[] @relation("MeetingAttendanceUser")
+  meetingAttendanceMarked MeetingAttendance[] @relation("MeetingAttendanceMarkedBy")
 }
 
 // A rolling window of recent Google Chat turns per person (both what they
@@ -159,10 +173,51 @@ model MeetingInstance {
   // true if this instance was created as the "next occurrence" target of a
   // tabled item from a prior instance in the same series
   agendaItems AgendaItem[]
+  attendance  MeetingAttendance[]
 
   createdAt   DateTime      @default(now())
 
   @@index([seriesId, startsAt])
+}
+
+// Admin-only per-person attendance tracking for one specific scheduled
+// meeting occurrence — labeled "Meeting Efficiency" throughout the UI (see
+// app/(app)/admin/meeting-efficiency and
+// app/api/meeting-instances/[id]/attendance/route.ts). One row per
+// participant per instance, created/updated only by an admin marking it
+// during or after the meeting. The absence of a row for a given
+// participant/instance just means it hasn't been marked yet — that is NOT
+// the same thing as an explicit ABSENT status, and both are treated
+// differently by the stats rollup in
+// app/api/admin/meeting-efficiency/route.ts (unmarked meetings are simply
+// excluded from someone's stats rather than counted against them).
+model MeetingAttendance {
+  id         String            @id @default(cuid())
+  instanceId String
+  instance   MeetingInstance   @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  userId     String
+  // Cascades on delete — like ChatMessage/ChatFollowUp above, this is this
+  // person's own historical data, so it's fine (and expected) for it to
+  // disappear if their account is ever deleted.
+  user       User              @relation("MeetingAttendanceUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  status     AttendanceStatus?
+  prepared   Boolean?
+  focused    Boolean?
+
+  // Which admin most recently marked this row — no onDelete here (same
+  // reasoning as AgendaItem.addedById / MeetingSeries.ownerId above), so
+  // deleting that admin's account requires nulling this out first; see
+  // app/api/admin/users/[id]/route.ts.
+  markedById String?
+  markedBy   User?             @relation("MeetingAttendanceMarkedBy", fields: [markedById], references: [id])
+  markedAt   DateTime?
+
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  @@unique([instanceId, userId])
+  @@index([userId])
 }
 
 model AgendaItem {

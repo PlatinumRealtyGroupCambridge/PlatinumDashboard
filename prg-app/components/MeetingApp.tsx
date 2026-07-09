@@ -1,7 +1,14 @@
 "use client";
 
-import { useState } from "react";
-import type { AgendaItemData, MeetingManagementData, SeriesData, TaskData, UserLite } from "@/lib/meeting-types";
+import { useEffect, useState } from "react";
+import type {
+  AgendaItemData,
+  AttendanceRow,
+  MeetingManagementData,
+  SeriesData,
+  TaskData,
+  UserLite,
+} from "@/lib/meeting-types";
 import {
   apiJson,
   defaultDueDateInput,
@@ -19,11 +26,13 @@ type OpenMeeting = { seriesId: string; instanceId: string } | null;
 export default function MeetingApp({
   initialData,
   currentUserId,
+  isAdmin,
   zoomLink,
   initialOpenInstanceId,
 }: {
   initialData: MeetingManagementData;
   currentUserId: string;
+  isAdmin: boolean;
   zoomLink: string;
   initialOpenInstanceId: string | null;
 }) {
@@ -181,8 +190,60 @@ export default function MeetingApp({
     setOpenMeeting({ seriesId: series.id, instanceId: series.instances[0].id });
   }
 
+  async function deleteMeeting(instanceId: string) {
+    await apiJson(`/api/meeting-instances/${instanceId}`, "DELETE");
+    setData((d) => {
+      const series = d.series
+        .map((s) => ({ ...s, instances: s.instances.filter((i) => i.id !== instanceId) }))
+        // A one-off meeting's series is deleted server-side along with its
+        // one and only instance (see deleteMeetingInstance's comment) — mirror
+        // that here so it doesn't linger in local state as an empty series.
+        .filter((s) => !(s.type === "ONE_OFF" && s.instances.length === 0));
+      return { ...d, series };
+    });
+    setOpenMeeting(null);
+  }
+
   const [showNewMeetingForm, setShowNewMeetingForm] = useState(false);
   const [openTaskFormFor, setOpenTaskFormFor] = useState<string | null>(null);
+
+  // ---------- Meeting Efficiency (admin-only attendance tracking) ----------
+  // Fetched on demand per-instance rather than bundled into the initial
+  // payload — only admins ever need it, and most instances an admin opens
+  // will never actually be looked at for attendance.
+  const [attendanceByInstance, setAttendanceByInstance] = useState<Record<string, AttendanceRow[]>>({});
+
+  useEffect(() => {
+    if (!isAdmin || !openMeeting) return;
+    const instanceId = openMeeting.instanceId;
+    if (attendanceByInstance[instanceId]) return;
+    let cancelled = false;
+    apiJson(`/api/meeting-instances/${instanceId}/attendance`, "GET")
+      .then(({ attendance }) => {
+        if (!cancelled) setAttendanceByInstance((m) => ({ ...m, [instanceId]: attendance }));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin, openMeeting?.instanceId]);
+
+  async function markAttendance(
+    instanceId: string,
+    userId: string,
+    patch: Partial<Pick<AttendanceRow, "status" | "prepared" | "focused">>
+  ) {
+    setAttendanceByInstance((m) => {
+      const rows = m[instanceId] ?? [];
+      const existing = rows.find((r) => r.userId === userId);
+      const updated: AttendanceRow = existing
+        ? { ...existing, ...patch }
+        : { userId, status: null, prepared: null, focused: null, ...patch };
+      return { ...m, [instanceId]: [...rows.filter((r) => r.userId !== userId), updated] };
+    });
+    await apiJson(`/api/meeting-instances/${instanceId}/attendance`, "PATCH", { userId, ...patch }).catch(() => {});
+  }
 
   async function createTaskFromAgendaItem(
     item: AgendaItemData,
@@ -244,11 +305,15 @@ export default function MeetingApp({
           onAddAgendaItem={(title) => addAgendaItem(instance.id, title)}
           onTable={tableToNextMeeting}
           onDelete={deleteAgendaItem}
+          onDeleteMeeting={() => deleteMeeting(instance.id)}
           openTaskFormFor={openTaskFormFor}
           setOpenTaskFormFor={setOpenTaskFormFor}
           onCreateTask={createTaskFromAgendaItem}
           allUsers={data.users}
           tasksById={(id) => data.tasks.find((t) => t.id === id)}
+          isAdmin={isAdmin}
+          attendance={attendanceByInstance[instance.id] ?? []}
+          onMarkAttendance={(userId, patch) => markAttendance(instance.id, userId, patch)}
         />
       );
     }
@@ -646,11 +711,15 @@ function LiveMeeting({
   onAddAgendaItem,
   onTable,
   onDelete,
+  onDeleteMeeting,
   openTaskFormFor,
   setOpenTaskFormFor,
   onCreateTask,
   allUsers,
   tasksById,
+  isAdmin,
+  attendance,
+  onMarkAttendance,
 }: {
   series: SeriesData;
   instance: { id: string; startsAt: string; agendaItems: AgendaItemData[] };
@@ -662,14 +731,20 @@ function LiveMeeting({
   onAddAgendaItem: (title: string) => void;
   onTable: (item: AgendaItemData) => void;
   onDelete: (item: AgendaItemData) => void;
+  onDeleteMeeting: () => Promise<void>;
   openTaskFormFor: string | null;
   setOpenTaskFormFor: (id: string | null) => void;
   onCreateTask: (item: AgendaItemData, title: string, assigneeId: string, dueDate: string) => void;
   allUsers: UserLite[];
   tasksById: (id: string) => TaskData | undefined;
+  isAdmin: boolean;
+  attendance: AttendanceRow[];
+  onMarkAttendance: (userId: string, patch: Partial<Pick<AttendanceRow, "status" | "prepared" | "focused">>) => void;
 }) {
   const date = new Date(instance.startsAt);
   const [newItemTitle, setNewItemTitle] = useState("");
+  const [confirmingDeleteMeeting, setConfirmingDeleteMeeting] = useState(false);
+  const [deletingMeeting, setDeletingMeeting] = useState(false);
 
   return (
     <div>
@@ -694,10 +769,47 @@ function LiveMeeting({
             })}
           </div>
         </div>
-        <a className="btn primary zoom-btn" href={zoomLink} target="_blank" rel="noopener">
-          Join Zoom Meeting
-        </a>
+        <div className="meeting-header-actions">
+          <a className="btn primary zoom-btn" href={zoomLink} target="_blank" rel="noopener">
+            Join Zoom Meeting
+          </a>
+          {!confirmingDeleteMeeting ? (
+            <button className="btn ghost-danger" onClick={() => setConfirmingDeleteMeeting(true)}>
+              Delete meeting
+            </button>
+          ) : (
+            <span className="delete-meeting-confirm">
+              <span className="owner-chip">Delete this meeting?</span>
+              <button
+                className="btn ghost-danger"
+                disabled={deletingMeeting}
+                onClick={async () => {
+                  setDeletingMeeting(true);
+                  try {
+                    await onDeleteMeeting();
+                  } catch {
+                    setDeletingMeeting(false);
+                  }
+                }}
+              >
+                {deletingMeeting ? "Deleting…" : "Yes, delete"}
+              </button>
+              <button className="btn" disabled={deletingMeeting} onClick={() => setConfirmingDeleteMeeting(false)}>
+                Cancel
+              </button>
+            </span>
+          )}
+        </div>
       </div>
+
+      {isAdmin && (
+        <AttendancePanel
+          series={series}
+          userById={userById}
+          attendance={attendance}
+          onMark={onMarkAttendance}
+        />
+      )}
 
       <div className="section-label">Agenda</div>
       <div>
@@ -747,6 +859,96 @@ function LiveMeeting({
           Add
         </button>
       </div>
+    </div>
+  );
+}
+
+// ---------- Meeting Efficiency (admin-only attendance panel) ----------
+
+const STATUS_OPTIONS: { value: "PRESENT" | "LATE" | "ABSENT"; label: string }[] = [
+  { value: "PRESENT", label: "On time" },
+  { value: "LATE", label: "Late" },
+  { value: "ABSENT", label: "No-show" },
+];
+
+function AttendancePanel({
+  series,
+  userById,
+  attendance,
+  onMark,
+}: {
+  series: SeriesData;
+  userById: (id: string | null) => UserLite | undefined;
+  attendance: AttendanceRow[];
+  onMark: (userId: string, patch: Partial<Pick<AttendanceRow, "status" | "prepared" | "focused">>) => void;
+}) {
+  const rowFor = (userId: string): AttendanceRow =>
+    attendance.find((a) => a.userId === userId) ?? { userId, status: null, prepared: null, focused: null };
+
+  return (
+    <div className="card attendance-panel">
+      <div className="attendance-panel-header">
+        <div className="mini-label">Meeting Efficiency</div>
+        <span className="owner-chip">Admin only — mark who showed up, prepared, and stayed focused.</span>
+      </div>
+      {series.participantIds.map((id) => {
+        const u = userById(id);
+        if (!u) return null;
+        const row = rowFor(id);
+        return (
+          <div key={id} className="attendance-row">
+            <span className="avatar-chip">
+              {u.initials} {u.name.split(" ")[0]}
+            </span>
+            <div className="attendance-controls">
+              <div className="attendance-chip-group">
+                {STATUS_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    className={"attendance-chip" + (row.status === opt.value ? " active" : "")}
+                    onClick={() => onMark(id, { status: row.status === opt.value ? null : opt.value })}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <div className="attendance-chip-group">
+                <button
+                  type="button"
+                  className={"attendance-chip" + (row.prepared === true ? " active" : "")}
+                  onClick={() => onMark(id, { prepared: row.prepared === true ? null : true })}
+                >
+                  Prepared
+                </button>
+                <button
+                  type="button"
+                  className={"attendance-chip warn" + (row.prepared === false ? " active" : "")}
+                  onClick={() => onMark(id, { prepared: row.prepared === false ? null : false })}
+                >
+                  Unprepared
+                </button>
+              </div>
+              <div className="attendance-chip-group">
+                <button
+                  type="button"
+                  className={"attendance-chip" + (row.focused === true ? " active" : "")}
+                  onClick={() => onMark(id, { focused: row.focused === true ? null : true })}
+                >
+                  Focused
+                </button>
+                <button
+                  type="button"
+                  className={"attendance-chip warn" + (row.focused === false ? " active" : "")}
+                  onClick={() => onMark(id, { focused: row.focused === false ? null : false })}
+                >
+                  Distracted
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
