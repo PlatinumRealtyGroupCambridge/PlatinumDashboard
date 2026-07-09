@@ -11,6 +11,7 @@ import {
   firstNameOf,
   fmtDate,
   fmtDueDate,
+  isoDateOnly,
   nextInstance,
   useAutosave,
 } from "@/lib/meeting-client-utils";
@@ -61,6 +62,18 @@ export default function GoalsApp({
     await apiJson(`/api/goals/${goal.id}`, "PATCH", { archived }).catch(() => {});
   }
 
+  async function changeAssignee(goal: GoalData, assigneeId: string) {
+    const nextId = assigneeId || null;
+    setGoals((gs) => gs.map((g) => (g.id === goal.id ? { ...g, assigneeId: nextId } : g)));
+    await apiJson(`/api/goals/${goal.id}`, "PATCH", { assigneeId: nextId }).catch(() => {});
+  }
+
+  async function changeDueDate(goal: GoalData, dueDate: string) {
+    const iso = dueDate ? `${dueDate}T00:00:00.000Z` : null;
+    setGoals((gs) => gs.map((g) => (g.id === goal.id ? { ...g, dueDate: iso } : g)));
+    await apiJson(`/api/goals/${goal.id}`, "PATCH", { dueDate: dueDate || null }).catch(() => {});
+  }
+
   async function addGoal(title: string, assigneeId: string, dueDate: string) {
     const { goal } = await apiJson("/api/goals", "POST", { title, assigneeId, dueDate });
     setGoals((gs) => [
@@ -101,6 +114,16 @@ export default function GoalsApp({
     return { done: allDone, archived: allDone };
   }
 
+  function updateSubtaskLocally(goalId: string, subtaskId: string, patch: Partial<TaskData>) {
+    setGoals((gs) =>
+      gs.map((g) => {
+        if (g.id !== goalId) return g;
+        const subtasks = g.subtasks.map((t) => (t.id === subtaskId ? { ...t, ...patch } : t));
+        return { ...g, subtasks, ...recomputeLocalGoalCompletion(g, subtasks) };
+      })
+    );
+  }
+
   async function addSubtask(goal: GoalData, title: string, assigneeId: string, dueDate: string) {
     const { task } = await apiJson("/api/tasks", "POST", { title, assigneeId, dueDate, goalId: goal.id });
     const newTask: TaskData = {
@@ -127,14 +150,25 @@ export default function GoalsApp({
 
   async function toggleSubtaskDone(goal: GoalData, subtask: TaskData) {
     const next = !subtask.done;
-    setGoals((gs) =>
-      gs.map((g) => {
-        if (g.id !== goal.id) return g;
-        const subtasks = g.subtasks.map((t) => (t.id === subtask.id ? { ...t, done: next } : t));
-        return { ...g, subtasks, ...recomputeLocalGoalCompletion(g, subtasks) };
-      })
-    );
+    updateSubtaskLocally(goal.id, subtask.id, { done: next });
     await apiJson(`/api/tasks/${subtask.id}`, "PATCH", { done: next }).catch(() => {});
+  }
+
+  async function saveSubtaskNotes(goal: GoalData, subtask: TaskData, notes: string) {
+    updateSubtaskLocally(goal.id, subtask.id, { notes });
+    await apiJson(`/api/tasks/${subtask.id}`, "PATCH", { notes }).catch(() => {});
+  }
+
+  async function changeSubtaskAssignee(goal: GoalData, subtask: TaskData, assigneeId: string) {
+    const nextId = assigneeId || null;
+    updateSubtaskLocally(goal.id, subtask.id, { assigneeId: nextId });
+    await apiJson(`/api/tasks/${subtask.id}`, "PATCH", { assigneeId: nextId }).catch(() => {});
+  }
+
+  async function changeSubtaskDueDate(goal: GoalData, subtask: TaskData, dueDate: string) {
+    const iso = dueDate ? `${dueDate}T00:00:00.000Z` : null;
+    updateSubtaskLocally(goal.id, subtask.id, { dueDate: iso });
+    await apiJson(`/api/tasks/${subtask.id}`, "PATCH", { dueDate: dueDate || null }).catch(() => {});
   }
 
   async function deleteSubtask(goal: GoalData, subtask: TaskData) {
@@ -201,9 +235,9 @@ export default function GoalsApp({
             <tr>
               <th style={{ width: 34 }}></th>
               <th>Goal</th>
-              <th>Owner</th>
+              <th style={{ width: 150 }}>Owner</th>
               <th style={{ width: 140 }}>Progress</th>
-              <th>Target</th>
+              <th style={{ width: 150 }}>Target</th>
               <th>Status</th>
               <th style={{ width: 140 }}></th>
             </tr>
@@ -230,8 +264,13 @@ export default function GoalsApp({
                 onAddToMeeting={(seriesId) => addToMeeting(g, seriesId)}
                 onDelete={() => setArchived(g, true)}
                 onRestore={() => setArchived(g, false)}
+                onChangeAssignee={(assigneeId) => changeAssignee(g, assigneeId)}
+                onChangeDueDate={(dueDate) => changeDueDate(g, dueDate)}
                 onAddSubtask={(title, assigneeId, dueDate) => addSubtask(g, title, assigneeId, dueDate)}
                 onToggleSubtaskDone={(subtask) => toggleSubtaskDone(g, subtask)}
+                onSaveSubtaskNotes={(subtask, notes) => saveSubtaskNotes(g, subtask, notes)}
+                onChangeSubtaskAssignee={(subtask, assigneeId) => changeSubtaskAssignee(g, subtask, assigneeId)}
+                onChangeSubtaskDueDate={(subtask, dueDate) => changeSubtaskDueDate(g, subtask, dueDate)}
                 onDeleteSubtask={(subtask) => deleteSubtask(g, subtask)}
                 mySeries={mySeries}
               />
@@ -283,8 +322,13 @@ function GoalRow({
   onAddToMeeting,
   onDelete,
   onRestore,
+  onChangeAssignee,
+  onChangeDueDate,
   onAddSubtask,
   onToggleSubtaskDone,
+  onSaveSubtaskNotes,
+  onChangeSubtaskAssignee,
+  onChangeSubtaskDueDate,
   onDeleteSubtask,
   mySeries,
 }: {
@@ -299,8 +343,13 @@ function GoalRow({
   onAddToMeeting: (seriesId: string) => void;
   onDelete: () => void;
   onRestore: () => void;
+  onChangeAssignee: (assigneeId: string) => void;
+  onChangeDueDate: (dueDate: string) => void;
   onAddSubtask: (title: string, assigneeId: string, dueDate: string) => void;
   onToggleSubtaskDone: (subtask: TaskData) => void;
+  onSaveSubtaskNotes: (subtask: TaskData, notes: string) => void;
+  onChangeSubtaskAssignee: (subtask: TaskData, assigneeId: string) => void;
+  onChangeSubtaskDueDate: (subtask: TaskData, dueDate: string) => void;
   onDeleteSubtask: (subtask: TaskData) => void;
   mySeries: SeriesData[];
 }) {
@@ -327,11 +376,31 @@ function GoalRow({
           {goal.title}
           {hasNotes && !open && <span className="notes-indicator" title="Has notes">📝</span>}
         </td>
-        <td className="owner-chip">{userById(goal.assigneeId)?.name ?? "Unassigned"}</td>
+        <td onClick={(e) => e.stopPropagation()}>
+          <select
+            className="inline-edit-select"
+            value={goal.assigneeId ?? ""}
+            onChange={(e) => onChangeAssignee(e.target.value)}
+          >
+            <option value="">Unassigned</option>
+            {users.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.name}
+              </option>
+            ))}
+          </select>
+        </td>
         <td>
           <GoalProgressBar doneCount={doneCount} totalCount={totalCount} pct={pct} />
         </td>
-        <td>{goal.dueDate ? fmtDueDate(new Date(goal.dueDate)) : "No target"}</td>
+        <td onClick={(e) => e.stopPropagation()}>
+          <input
+            type="date"
+            className="inline-edit-date"
+            value={goal.dueDate ? isoDateOnly(goal.dueDate) : ""}
+            onChange={(e) => onChangeDueDate(e.target.value)}
+          />
+        </td>
         <td onClick={(e) => e.stopPropagation()}>
           <button
             className={"status-badge " + GOAL_STATUS_CLASS[goal.status]}
@@ -378,8 +447,12 @@ function GoalRow({
               <GoalProgressBar doneCount={doneCount} totalCount={totalCount} pct={pct} showLabel />
               <SubtaskList
                 subtasks={goal.subtasks}
+                users={users}
                 userById={userById}
                 onToggleDone={onToggleSubtaskDone}
+                onSaveNotes={onSaveSubtaskNotes}
+                onChangeAssignee={onChangeSubtaskAssignee}
+                onChangeDueDate={onChangeSubtaskDueDate}
                 onDelete={onDeleteSubtask}
               />
               <AddSubtaskForm users={users} onAdd={onAddSubtask} />
@@ -407,7 +480,11 @@ function GoalProgressBar({
   showLabel?: boolean;
 }) {
   if (totalCount === 0) {
-    return showLabel ? <div className="autosave-hint">No tasks yet — add one below.</div> : <span style={{ color: "var(--text-muted)", fontSize: 11.5 }}>No tasks yet</span>;
+    return showLabel ? (
+      <div className="autosave-hint">No tasks yet — add one below.</div>
+    ) : (
+      <span style={{ color: "var(--text-muted)", fontSize: 11.5 }}>No tasks yet</span>
+    );
   }
   return (
     <div className="goal-progress-wrap">
@@ -425,33 +502,136 @@ function GoalProgressBar({
 
 function SubtaskList({
   subtasks,
+  users,
   userById,
   onToggleDone,
+  onSaveNotes,
+  onChangeAssignee,
+  onChangeDueDate,
   onDelete,
 }: {
   subtasks: TaskData[];
+  users: UserLite[];
   userById: (id: string | null) => UserLite | undefined;
   onToggleDone: (subtask: TaskData) => void;
+  onSaveNotes: (subtask: TaskData, notes: string) => void;
+  onChangeAssignee: (subtask: TaskData, assigneeId: string) => void;
+  onChangeDueDate: (subtask: TaskData, dueDate: string) => void;
   onDelete: (subtask: TaskData) => void;
 }) {
+  const [openSubtaskId, setOpenSubtaskId] = useState<string | null>(null);
+
   if (!subtasks.length) return null;
   return (
     <div className="subtask-list">
       {subtasks.map((t) => (
-        <div key={t.id} className="subtask-row">
-          <button
-            className={"checkbox" + (t.done ? " checked" : "")}
-            onClick={() => onToggleDone(t)}
-            aria-label="Toggle task done"
-          />
-          <span className={"subtask-title" + (t.done ? " strike-text" : "")}>{t.title}</span>
-          <span className="subtask-meta">{userById(t.assigneeId)?.name.split(" ")[0] ?? "Unassigned"}</span>
-          <span className="subtask-meta">{t.dueDate ? fmtDueDate(new Date(t.dueDate)) : "No due date"}</span>
-          <button className="subtask-remove" onClick={() => onDelete(t)} aria-label="Remove task" title="Remove task">
-            ✕
-          </button>
-        </div>
+        <SubtaskRow
+          key={t.id}
+          task={t}
+          users={users}
+          userById={userById}
+          open={openSubtaskId === t.id}
+          onToggleOpen={() => setOpenSubtaskId(openSubtaskId === t.id ? null : t.id)}
+          onToggleDone={() => onToggleDone(t)}
+          onSaveNotes={(notes) => onSaveNotes(t, notes)}
+          onChangeAssignee={(assigneeId) => onChangeAssignee(t, assigneeId)}
+          onChangeDueDate={(dueDate) => onChangeDueDate(t, dueDate)}
+          onDelete={() => onDelete(t)}
+        />
       ))}
+    </div>
+  );
+}
+
+function SubtaskRow({
+  task,
+  users,
+  userById,
+  open,
+  onToggleOpen,
+  onToggleDone,
+  onSaveNotes,
+  onChangeAssignee,
+  onChangeDueDate,
+  onDelete,
+}: {
+  task: TaskData;
+  users: UserLite[];
+  userById: (id: string | null) => UserLite | undefined;
+  open: boolean;
+  onToggleOpen: () => void;
+  onToggleDone: () => void;
+  onSaveNotes: (notes: string) => void;
+  onChangeAssignee: (assigneeId: string) => void;
+  onChangeDueDate: (dueDate: string) => void;
+  onDelete: () => void;
+}) {
+  const [notes, setNotes] = useState(task.notes);
+  const hasNotes = task.notes.trim().length > 0;
+
+  useAutosave(notes, (n) => onSaveNotes(n));
+
+  return (
+    <div className="subtask-block">
+      <div className="subtask-row clickable-row" onClick={onToggleOpen}>
+        <button
+          className={"checkbox" + (task.done ? " checked" : "")}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleDone();
+          }}
+          aria-label="Toggle task done"
+        />
+        <span className="row-expand-indicator">{open ? "▾" : "▸"}</span>
+        <span className={"subtask-title" + (task.done ? " strike-text" : "")}>
+          {task.title}
+          {hasNotes && !open && <span className="notes-indicator" title="Has notes">📝</span>}
+        </span>
+        <span onClick={(e) => e.stopPropagation()}>
+          <select
+            className="inline-edit-select"
+            value={task.assigneeId ?? ""}
+            onChange={(e) => onChangeAssignee(e.target.value)}
+          >
+            <option value="">Unassigned</option>
+            {users.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.name.split(" ")[0]}
+              </option>
+            ))}
+          </select>
+        </span>
+        <span onClick={(e) => e.stopPropagation()}>
+          <input
+            type="date"
+            className="inline-edit-date"
+            value={task.dueDate ? isoDateOnly(task.dueDate) : ""}
+            onChange={(e) => onChangeDueDate(e.target.value)}
+          />
+        </span>
+        <button
+          className="subtask-remove"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          aria-label="Remove task"
+          title="Remove task"
+        >
+          ✕
+        </button>
+      </div>
+      {open && (
+        <div className="subtask-notes" onClick={(e) => e.stopPropagation()}>
+          <textarea
+            className="ai-notes"
+            placeholder="Notes on this task…"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            autoFocus
+          />
+        </div>
+      )}
     </div>
   );
 }

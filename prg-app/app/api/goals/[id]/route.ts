@@ -12,12 +12,26 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     done?: boolean;
     archived?: boolean;
     archivedAt?: Date | null;
+    assigneeId?: string | null;
+    dueDate?: Date | null;
   } = {};
 
   if (typeof body?.status === "string" && (VALID_STATUSES as readonly string[]).includes(body.status)) {
     data.status = body.status;
   }
   if (typeof body?.notes === "string") data.notes = body.notes;
+  if (typeof body?.assigneeId === "string" || body?.assigneeId === null) {
+    data.assigneeId = body.assigneeId;
+  }
+  // See the matching comment in app/api/tasks/[id]/route.ts — due dates are
+  // stored/read as UTC-midnight-anchored calendar days throughout, on
+  // purpose, so they don't shift by a day depending on the viewer's
+  // timezone.
+  if (typeof body?.dueDate === "string") {
+    data.dueDate = body.dueDate ? new Date(body.dueDate) : null;
+  } else if (body?.dueDate === null) {
+    data.dueDate = null;
+  }
 
   // Same archive cascade as tasks: checking a goal off as done archives
   // it; an explicit `archived` (Delete/Restore) always wins.

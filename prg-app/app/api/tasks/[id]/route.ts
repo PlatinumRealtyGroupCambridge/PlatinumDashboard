@@ -11,9 +11,30 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     return NextResponse.json({ error: "Task not found" }, { status: 404 });
   }
 
-  const data: { done?: boolean; notes?: string; archived?: boolean; archivedAt?: Date | null } = {};
+  const data: {
+    done?: boolean;
+    notes?: string;
+    archived?: boolean;
+    archivedAt?: Date | null;
+    assigneeId?: string | null;
+    dueDate?: Date | null;
+  } = {};
 
   if (typeof body?.notes === "string") data.notes = body.notes;
+  if (typeof body?.assigneeId === "string" || body?.assigneeId === null) {
+    data.assigneeId = body.assigneeId;
+  }
+  // A "YYYY-MM-DD" date-only string is parsed as UTC midnight, which is
+  // also how it's displayed everywhere (see lib/meeting-client-utils.ts's
+  // fmtDueDate/daysUntil, which format due dates using UTC getters). Due
+  // dates are calendar days, not moments in time, so keeping every step —
+  // storage, this parse, and every display — anchored to UTC is what keeps
+  // "Dec 1" from ever silently becoming "Nov 30" for someone west of GMT.
+  if (typeof body?.dueDate === "string") {
+    data.dueDate = body.dueDate ? new Date(body.dueDate) : null;
+  } else if (body?.dueDate === null) {
+    data.dueDate = null;
+  }
 
   // Checking a task off as done archives it automatically; unchecking it
   // brings it back out of the archive. Sub-tasks that belong to a goal are

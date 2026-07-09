@@ -29,15 +29,35 @@ export const fmtDate = (d: Date) =>
   d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 export const fmtTime = (d: Date) =>
   d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-export const fmtDueDate = (d: Date) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+// Due dates are calendar days ("Dec 1"), not moments in time, and are
+// stored as UTC midnight for that calendar day (see the comment in
+// app/api/tasks/[id]/route.ts). Formatting them with the viewer's LOCAL
+// timezone — like fmtDate/fmtTime above correctly do for actual meeting
+// times — would shift the displayed date backward by a day for anyone west
+// of GMT (e.g. Dec 1 UTC midnight is 7pm Nov 30 in Eastern time). Explicitly
+// formatting in UTC keeps the calendar date the same for every viewer,
+// which is what a due date should do.
+export const fmtDueDate = (d: Date) =>
+  d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 export const monthLabel = (year: number, month: number) =>
   new Date(year, month, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+
+// Converts a stored due-date ISO string (e.g. "2026-12-01T00:00:00.000Z")
+// to the "YYYY-MM-DD" form <input type="date"> expects, for pre-filling an
+// edit field. The ISO string's first 10 characters are already the UTC
+// calendar date, so this is a plain substring — no Date object math, and
+// so nothing that could reintroduce the timezone-shift bug above.
+export const isoDateOnly = (iso: string) => iso.slice(0, 10);
 
 export function daysUntil(due: Date | null) {
   if (!due) return null;
   const now = new Date();
   const a = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const b = new Date(due.getFullYear(), due.getMonth(), due.getDate());
+  // `due` is a UTC-midnight instant representing a calendar day — read it
+  // back with UTC getters (not local ones) so it doesn't drift to the
+  // previous day for viewers west of GMT, same reasoning as fmtDueDate.
+  const b = new Date(due.getUTCFullYear(), due.getUTCMonth(), due.getUTCDate());
   return Math.round((b.getTime() - a.getTime()) / 86400000);
 }
 export function dueStatus(due: Date | null, done: boolean) {
@@ -75,9 +95,16 @@ export async function apiJson(url: string, method: string, body?: unknown) {
 }
 
 export function defaultDueDateInput() {
+  // Built from LOCAL date parts on purpose (not toISOString(), which
+  // converts to UTC first and can land on the wrong calendar day depending
+  // on the time of day and the viewer's timezone — the same class of bug
+  // described above fmtDueDate).
   const d = new Date();
   d.setDate(d.getDate() + 7);
-  return d.toISOString().slice(0, 10);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 export function firstNameOf(u: { name: string } | undefined) {

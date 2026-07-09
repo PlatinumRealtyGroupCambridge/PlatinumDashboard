@@ -10,6 +10,7 @@ import {
   dueStatus,
   firstNameOf,
   fmtDate,
+  isoDateOnly,
   nextInstance,
   useAutosave,
 } from "@/lib/meeting-client-utils";
@@ -54,6 +55,18 @@ export default function TodosApp({
   async function setArchived(task: TaskData, archived: boolean) {
     setTasks((ts) => ts.map((t) => (t.id === task.id ? { ...t, archived } : t)));
     await apiJson(`/api/tasks/${task.id}`, "PATCH", { archived }).catch(() => {});
+  }
+
+  async function changeAssignee(task: TaskData, assigneeId: string) {
+    const nextId = assigneeId || null;
+    setTasks((ts) => ts.map((t) => (t.id === task.id ? { ...t, assigneeId: nextId } : t)));
+    await apiJson(`/api/tasks/${task.id}`, "PATCH", { assigneeId: nextId }).catch(() => {});
+  }
+
+  async function changeDueDate(task: TaskData, dueDate: string) {
+    const iso = dueDate ? new Date(`${dueDate}T00:00:00Z`).toISOString() : null;
+    setTasks((ts) => ts.map((t) => (t.id === task.id ? { ...t, dueDate: iso } : t)));
+    await apiJson(`/api/tasks/${task.id}`, "PATCH", { dueDate: dueDate || null }).catch(() => {});
   }
 
   async function addTask(title: string, assigneeId: string, dueDate: string) {
@@ -112,7 +125,7 @@ export default function TodosApp({
       <h1 className="page-title">To-Dos</h1>
       <p className="page-sub">
         Tasks either created directly or spun off from a meeting agenda item. Click a task to add or
-        read notes.
+        read notes; use the owner and due date fields to reassign or reschedule anytime.
       </p>
 
       <div className="panel-toolbar">
@@ -149,7 +162,8 @@ export default function TodosApp({
             <tr>
               <th style={{ width: 34 }}></th>
               <th>Task</th>
-              <th>Owner</th>
+              <th style={{ width: 150 }}>Owner</th>
+              <th style={{ width: 150 }}>Due</th>
               <th>Status</th>
               <th style={{ width: 140 }}></th>
             </tr>
@@ -157,7 +171,7 @@ export default function TodosApp({
           <tbody>
             {list.length === 0 && (
               <tr>
-                <td colSpan={5} className="empty-state">
+                <td colSpan={6} className="empty-state">
                   No tasks match this filter.
                 </td>
               </tr>
@@ -166,6 +180,7 @@ export default function TodosApp({
               <TaskRow
                 key={t.id}
                 task={t}
+                users={users}
                 userById={userById}
                 open={openNotesFor === t.id}
                 onToggleOpen={() => setOpenNotesFor(openNotesFor === t.id ? null : t.id)}
@@ -174,6 +189,8 @@ export default function TodosApp({
                 onAddToMeeting={(seriesId) => addToMeeting(t, seriesId)}
                 onDelete={() => setArchived(t, true)}
                 onRestore={() => setArchived(t, false)}
+                onChangeAssignee={(assigneeId) => changeAssignee(t, assigneeId)}
+                onChangeDueDate={(dueDate) => changeDueDate(t, dueDate)}
                 mySeries={mySeries}
               />
             ))}
@@ -214,6 +231,7 @@ export default function TodosApp({
 
 function TaskRow({
   task,
+  users,
   userById,
   open,
   onToggleOpen,
@@ -222,9 +240,12 @@ function TaskRow({
   onAddToMeeting,
   onDelete,
   onRestore,
+  onChangeAssignee,
+  onChangeDueDate,
   mySeries,
 }: {
   task: TaskData;
+  users: UserLite[];
   userById: (id: string | null) => UserLite | undefined;
   open: boolean;
   onToggleOpen: () => void;
@@ -233,6 +254,8 @@ function TaskRow({
   onAddToMeeting: (seriesId: string) => void;
   onDelete: () => void;
   onRestore: () => void;
+  onChangeAssignee: (assigneeId: string) => void;
+  onChangeDueDate: (dueDate: string) => void;
   mySeries: SeriesData[];
 }) {
   const [notes, setNotes] = useState(task.notes);
@@ -258,7 +281,28 @@ function TaskRow({
           )}
           {hasNotes && !open && <span className="notes-indicator" title="Has notes">📝</span>}
         </td>
-        <td className="owner-chip">{userById(task.assigneeId)?.name ?? "Unassigned"}</td>
+        <td onClick={(e) => e.stopPropagation()}>
+          <select
+            className="inline-edit-select"
+            value={task.assigneeId ?? ""}
+            onChange={(e) => onChangeAssignee(e.target.value)}
+          >
+            <option value="">Unassigned</option>
+            {users.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.name}
+              </option>
+            ))}
+          </select>
+        </td>
+        <td onClick={(e) => e.stopPropagation()}>
+          <input
+            type="date"
+            className="inline-edit-date"
+            value={task.dueDate ? isoDateOnly(task.dueDate) : ""}
+            onChange={(e) => onChangeDueDate(e.target.value)}
+          />
+        </td>
         <td>
           <span className={"status-badge " + dueStatus(due, task.done)}>{dueLabel(due, task.done)}</span>
         </td>
@@ -277,7 +321,7 @@ function TaskRow({
       {open && (
         <tr>
           <td></td>
-          <td colSpan={4} style={{ paddingTop: 0 }}>
+          <td colSpan={5} style={{ paddingTop: 0 }}>
             <div className="detail-panel" onClick={(e) => e.stopPropagation()}>
               <div className="detail-panel-header">
                 <div className="mini-label">Notes</div>
