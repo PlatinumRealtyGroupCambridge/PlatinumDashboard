@@ -42,7 +42,7 @@ function round2(n: number) {
 
 const HISTORY_DAYS = 420;
 
-type WorkOrder = { id: string; openedAt: string; plannedDurationDays: number };
+type WorkOrder = { id: string; openedAt: string; plannedDurationDays: number; lastUpdatedAt: string };
 type MaintenanceTransaction = {
   id: string;
   date: string;
@@ -66,7 +66,18 @@ function buildWorkOrders(todayISO: string): WorkOrder[] {
         : durationRoll < 0.9
           ? 4 + Math.floor(rand() * 6)
           : 10 + Math.floor(rand() * 12);
-    orders.push({ id: `wo-${i}`, openedAt, plannedDurationDays });
+
+    // Most open work orders get touched every day or two; a smaller
+    // portion sit stale for a while — that gap is what "needs attention"
+    // surfaces. Bounded so a freshly-opened order can't have a "last
+    // update" from before it existed.
+    const staleRoll = rand();
+    const daysSinceUpdate =
+      staleRoll < 0.65 ? Math.floor(rand() * 3) : staleRoll < 0.85 ? 3 + Math.floor(rand() * 4) : 7 + Math.floor(rand() * 10);
+    const daysSinceOpened = Math.max(0, -daysBetween(todayISO, openedAt));
+    const lastUpdatedAt = addDays(todayISO, -Math.min(daysSinceUpdate, daysSinceOpened));
+
+    orders.push({ id: `wo-${i}`, openedAt, plannedDurationDays, lastUpdatedAt });
   }
   return orders;
 }
@@ -91,29 +102,34 @@ function buildTransactions(todayISO: string): MaintenanceTransaction[] {
 export function getOpenWorkOrderStats(todayISO: string) {
   const orders = buildWorkOrders(todayISO);
   let open = 0;
-  const recentlyClosedDurations: number[] = [];
+  let needsAttention = 0;
   for (const o of orders) {
     const wouldCloseAt = addDays(o.openedAt, o.plannedDurationDays);
     if (wouldCloseAt > todayISO) {
       open++;
-    } else if (daysBetween(wouldCloseAt, todayISO) <= 90) {
-      // Only recently-closed orders count toward the "days to close"
-      // average, so it reflects current performance rather than getting
-      // diluted by over a year of history.
-      recentlyClosedDurations.push(o.plannedDurationDays);
+      if (daysBetween(o.lastUpdatedAt, todayISO) >= 3) needsAttention++;
     }
   }
-  const avgDaysToClose =
-    recentlyClosedDurations.length > 0
-      ? round2(recentlyClosedDurations.reduce((a, b) => a + b, 0) / recentlyClosedDurations.length)
-      : null;
-  return { openWorkOrders: open, avgDaysToClose };
+  return { openWorkOrders: open, needsAttention };
 }
 
-// The four date-range-filterable financial metrics.
+// The date-range-filterable metrics: average days to close (bucketed by
+// each work order's close date, so it moves with the selected range like
+// the financial totals below) plus the four labor/cost totals.
 export function getRangeTotals(fromISO: string, toISO: string, todayISO: string) {
+  const orders = buildWorkOrders(todayISO);
+  const closedInRange = orders.filter((o) => {
+    const closedAt = addDays(o.openedAt, o.plannedDurationDays);
+    return closedAt <= todayISO && closedAt >= fromISO && closedAt <= toISO;
+  });
+  const avgDaysToClose =
+    closedInRange.length > 0
+      ? round2(closedInRange.reduce((sum, o) => sum + o.plannedDurationDays, 0) / closedInRange.length)
+      : null;
+
   const txns = buildTransactions(todayISO).filter((t) => t.date >= fromISO && t.date <= toISO);
   return {
+    avgDaysToClose,
     laborBilled: round2(txns.reduce((sum, t) => sum + t.laborBilled, 0)),
     laborHours: round2(txns.reduce((sum, t) => sum + t.laborHours, 0)),
     tripChargeRevenue: round2(txns.reduce((sum, t) => sum + t.tripCharge, 0)),

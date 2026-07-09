@@ -3,8 +3,14 @@
 import { useEffect, useState } from "react";
 import { formatCurrency, formatHours } from "@/lib/format";
 
-type DayStats = { openWorkOrders: number; avgDaysToClose: number | null };
-type RangeTotals = { laborBilled: number; laborHours: number; tripChargeRevenue: number; gasSpend: number };
+type DayStats = { openWorkOrders: number; needsAttention: number };
+type RangeTotals = {
+  avgDaysToClose: number | null;
+  laborBilled: number;
+  laborHours: number;
+  tripChargeRevenue: number;
+  gasSpend: number;
+};
 type Preset = "this_month" | "last_month" | "ytd" | "custom";
 
 function todayInput() {
@@ -85,14 +91,12 @@ export default function MaintenanceDashboard({ label, blurb }: { label: string; 
           <div className="value">{loading ? "—" : (dayStats?.openWorkOrders ?? "—")}</div>
         </div>
         <div className="stat-tile">
-          <div className="label">Days to close a work order (avg, last 90 days)</div>
-          <div className="value">
-            {loading ? "—" : dayStats?.avgDaysToClose != null ? `${dayStats.avgDaysToClose.toFixed(1)} days` : "—"}
-          </div>
+          <div className="label"># of work orders that need attention (no update in 3+ days)</div>
+          <div className="value">{loading ? "—" : (dayStats?.needsAttention ?? "—")}</div>
         </div>
       </div>
 
-      <div className="section-label">Labor &amp; costs</div>
+      <div className="section-label">Work orders &amp; costs</div>
       <div className="efficiency-filters">
         <div className="filter-row">
           {(["this_month", "last_month", "ytd"] as const).map((p) => (
@@ -133,7 +137,13 @@ export default function MaintenanceDashboard({ label, blurb }: { label: string; 
         </p>
       )}
 
-      <div className="stat-row">
+      <div className="stat-row" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
+        <div className="stat-tile">
+          <div className="label">Days to close a work order (avg)</div>
+          <div className="value">
+            {loading ? "—" : rangeTotals?.avgDaysToClose != null ? `${rangeTotals.avgDaysToClose.toFixed(1)} days` : "—"}
+          </div>
+        </div>
         <div className="stat-tile">
           <div className="label">Total maintenance labor billed ($)</div>
           <div className="value">{loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.laborBilled) : "—"}</div>
