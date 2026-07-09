@@ -11,6 +11,7 @@ import {
   firstNameOf,
   fmtDate,
   nextInstance,
+  useAutosave,
 } from "@/lib/meeting-client-utils";
 
 type TaskFilter = "all" | "open" | "overdue" | "archived";
@@ -69,6 +70,8 @@ export default function TodosApp({
         assigneeId: task.assigneeId,
         agendaItemId: null,
         meetingRefs: [],
+        goalId: null,
+        goalTitle: null,
       },
     ]);
   }
@@ -236,26 +239,30 @@ function TaskRow({
   const hasNotes = task.notes.trim().length > 0;
   const due = task.dueDate ? new Date(task.dueDate) : null;
 
+  useAutosave(notes, (n) => onSaveNotes(n));
+
   return (
     <>
-      <tr>
-        <td>
+      <tr className="clickable-row" onClick={onToggleOpen}>
+        <td onClick={(e) => e.stopPropagation()}>
           <button className={"checkbox" + (task.done ? " checked" : "")} onClick={onToggleDone} aria-label="Toggle done" />
         </td>
         <td className={task.done ? "strike-text" : ""}>
+          <span className="row-expand-indicator">{open ? "▾" : "▸"}</span>
           {task.title}
           {task.agendaItemId && (
             <span style={{ color: "var(--text-muted)", fontSize: 11.5 }}> · from meeting</span>
           )}
+          {task.goalTitle && (
+            <span style={{ color: "var(--text-muted)", fontSize: 11.5 }}> · part of goal: {task.goalTitle}</span>
+          )}
+          {hasNotes && !open && <span className="notes-indicator" title="Has notes">📝</span>}
         </td>
         <td className="owner-chip">{userById(task.assigneeId)?.name ?? "Unassigned"}</td>
         <td>
           <span className={"status-badge " + dueStatus(due, task.done)}>{dueLabel(due, task.done)}</span>
         </td>
-        <td style={{ whiteSpace: "nowrap" }}>
-          <button className="btn" onClick={onToggleOpen}>
-            {open ? "Close" : hasNotes ? "View" : "+ Add"}
-          </button>{" "}
+        <td style={{ whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
           {task.archived ? (
             <button className="btn" onClick={onRestore}>
               Restore
@@ -271,20 +278,20 @@ function TaskRow({
         <tr>
           <td></td>
           <td colSpan={4} style={{ paddingTop: 0 }}>
-            <div className="detail-panel">
-              <div className="mini-label">Notes</div>
+            <div className="detail-panel" onClick={(e) => e.stopPropagation()}>
+              <div className="detail-panel-header">
+                <div className="mini-label">Notes</div>
+                <button className="btn" onClick={onToggleOpen}>
+                  Minimize ▴
+                </button>
+              </div>
               <textarea
                 className="ai-notes"
                 placeholder="Notes on this task…"
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
+                autoFocus
               />
-              <div className="ai-actions">
-                <button className="btn" onClick={() => onSaveNotes(notes)}>
-                  Save note
-                </button>
-                {notes.trim() && <span className="saved-tag">✓ Saved</span>}
-              </div>
 
               <div className="mini-label">Meetings</div>
               <MeetingRefs refs={task.meetingRefs} />

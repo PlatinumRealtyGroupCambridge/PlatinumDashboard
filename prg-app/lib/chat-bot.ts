@@ -138,11 +138,22 @@ async function resolveSender(sender?: ChatSender) {
 // ---------- Claude-based intent parsing ----------
 
 type ParsedAction =
-  | { tool: "add_agenda_item"; seriesId: string; title: string }
-  | { tool: "add_task"; assigneeUserId: string; title: string; dueDate?: string }
-  | { tool: "add_goal"; assigneeUserId: string; title: string; dueDate?: string }
+  | { tool: "add_agenda_item"; seriesId: string; title: string; notes?: string }
+  | { tool: "add_task"; assigneeUserId: string; title: string; dueDate?: string; notes?: string }
+  | { tool: "add_goal"; assigneeUserId: string; title: string; dueDate?: string; notes?: string }
   | { tool: "set_due_date_on_pending_item"; dueDate?: string }
   | { tool: "ask_for_clarification"; question: string };
+
+const TITLE_FIELD = {
+  type: "string" as const,
+  description:
+    "A short, precise title — like a headline, well under 10 words. Do NOT just copy the sender's whole message; distill it down to the essential point.",
+};
+const NOTES_FIELD = {
+  type: "string" as const,
+  description:
+    "Any additional detail, context, or specifics from the sender's message that don't fit in the short title. You may lightly summarize or rephrase for clarity — it doesn't need to be verbatim. Omit if the title alone already captures everything.",
+};
 
 const BASE_TOOLS = [
   {
@@ -153,7 +164,8 @@ const BASE_TOOLS = [
       type: "object" as const,
       properties: {
         seriesId: { type: "string" as const, description: "id of the meeting series from the provided list" },
-        title: { type: "string" as const, description: "the agenda item text" },
+        title: TITLE_FIELD,
+        notes: NOTES_FIELD,
       },
       required: ["seriesId", "title"],
     },
@@ -165,7 +177,8 @@ const BASE_TOOLS = [
       type: "object" as const,
       properties: {
         assigneeUserId: { type: "string" as const, description: "id of the team member from the provided list" },
-        title: { type: "string" as const },
+        title: TITLE_FIELD,
+        notes: NOTES_FIELD,
         dueDate: { type: "string" as const, description: "ISO date YYYY-MM-DD if a due date was mentioned; omit otherwise" },
       },
       required: ["assigneeUserId", "title"],
@@ -178,7 +191,8 @@ const BASE_TOOLS = [
       type: "object" as const,
       properties: {
         assigneeUserId: { type: "string" as const, description: "id of the team member from the provided list" },
-        title: { type: "string" as const },
+        title: TITLE_FIELD,
+        notes: NOTES_FIELD,
         dueDate: { type: "string" as const, description: "ISO date YYYY-MM-DD target date if mentioned; omit otherwise" },
       },
       required: ["assigneeUserId", "title"],
@@ -236,7 +250,9 @@ ${mySeries.map((s) => `- ${s.id}: ${s.name}`).join("\n") || "(none)"}
 Team members tasks/goals can be assigned to (use these exact ids):
 ${allUsers.map((u) => `- ${u.id}: ${u.name}`).join("\n")}
 
-Resolve relative dates (like "next Friday" or "in two weeks") to an actual YYYY-MM-DD date using today's date above. If the message doesn't clearly map to adding an agenda item, task, or goal, or references a meeting/person you can't confidently match from the lists above, call ask_for_clarification instead of guessing.`;
+Resolve relative dates (like "next Friday" or "in two weeks") to an actual YYYY-MM-DD date using today's date above. If the message doesn't clearly map to adding an agenda item, task, or goal, or references a meeting/person you can't confidently match from the lists above, call ask_for_clarification instead of guessing.
+
+Titles and notes: write a short, precise title — a few words, like a headline — rather than pasting the sender's whole message as the title. If their message has extra detail beyond what a short title can hold (context, specifics, reasoning), put that in the notes field, summarized or lightly cleaned up as needed rather than verbatim. Example: "create a video script on the cambridge rental market pricing" → title "Cambridge rental market pricing video script", with any extra detail from the message in notes.`;
 
   const tools = pendingFollowUp ? [...BASE_TOOLS, SET_DUE_DATE_TOOL] : BASE_TOOLS;
 
@@ -257,13 +273,19 @@ Resolve relative dates (like "next Friday" or "in two weeks") to an actual YYYY-
   const input = toolUse.input as Record<string, unknown>;
   switch (toolUse.name) {
     case "add_agenda_item":
-      return { tool: "add_agenda_item", seriesId: String(input.seriesId), title: String(input.title) };
+      return {
+        tool: "add_agenda_item",
+        seriesId: String(input.seriesId),
+        title: String(input.title),
+        notes: typeof input.notes === "string" ? input.notes : undefined,
+      };
     case "add_task":
       return {
         tool: "add_task",
         assigneeUserId: String(input.assigneeUserId),
         title: String(input.title),
         dueDate: typeof input.dueDate === "string" ? input.dueDate : undefined,
+        notes: typeof input.notes === "string" ? input.notes : undefined,
       };
     case "add_goal":
       return {
@@ -271,6 +293,7 @@ Resolve relative dates (like "next Friday" or "in two weeks") to an actual YYYY-
         assigneeUserId: String(input.assigneeUserId),
         title: String(input.title),
         dueDate: typeof input.dueDate === "string" ? input.dueDate : undefined,
+        notes: typeof input.notes === "string" ? input.notes : undefined,
       };
     case "set_due_date_on_pending_item":
       return {
@@ -339,9 +362,15 @@ async function executeAction(
     }
     const instance = await getOrCreateNextInstance(series.id);
     await prisma.agendaItem.create({
-      data: { instanceId: instance.id, title: action.title, addedById: sender.id },
+      data: {
+        instanceId: instance.id,
+        title: action.title,
+        notes: action.notes ?? "",
+        addedById: sender.id,
+      },
     });
-    return `${pick(ACK_OPENERS)} Added "${action.title}" to the agenda for ${series.name} on ${instance.startsAt.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}.`;
+    const noteAside = action.notes ? " I jotted down the extra details in the notes." : "";
+    return `${pick(ACK_OPENERS)} Added "${action.title}" to the agenda for ${series.name} on ${instance.startsAt.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}.${noteAside}`;
   }
 
   if (action.tool === "add_task") {
@@ -352,18 +381,20 @@ async function executeAction(
     const task = await prisma.task.create({
       data: {
         title: action.title,
+        notes: action.notes ?? "",
         assigneeId: assignee.id,
         dueDate: action.dueDate ? new Date(action.dueDate) : null,
         createdById: sender.id,
       },
     });
+    const noteAside = action.notes ? " I added the extra details to its notes." : "";
     if (action.dueDate) {
-      return `${pick(ACK_OPENERS)} Added a task for ${firstName}: "${action.title}" — due ${formatDueDate(action.dueDate)}.`;
+      return `${pick(ACK_OPENERS)} Added a task for ${firstName}: "${action.title}" — due ${formatDueDate(action.dueDate)}.${noteAside}`;
     }
     await prisma.chatFollowUp.create({
       data: { userId: sender.id, itemType: "task", itemId: task.id, itemTitle: action.title },
     });
-    return `${pick(ACK_OPENERS)} I added a task for ${firstName}: "${action.title}". Did you want to give ${firstName} a deadline for this? Just tell me the date, or say "no rush" if not.`;
+    return `${pick(ACK_OPENERS)} I added a task for ${firstName}: "${action.title}".${noteAside} Did you want to give ${firstName} a deadline for this? Just tell me the date, or say "no rush" if not.`;
   }
 
   if (action.tool === "add_goal") {
@@ -374,18 +405,20 @@ async function executeAction(
     const goal = await prisma.goal.create({
       data: {
         title: action.title,
+        notes: action.notes ?? "",
         assigneeId: assignee.id,
         dueDate: action.dueDate ? new Date(action.dueDate) : null,
         createdById: sender.id,
       },
     });
+    const noteAside = action.notes ? " I added the extra details to its notes." : "";
     if (action.dueDate) {
-      return `${pick(ACK_OPENERS)} Added a goal for ${firstName}: "${action.title}" — target ${formatDueDate(action.dueDate)}.`;
+      return `${pick(ACK_OPENERS)} Added a goal for ${firstName}: "${action.title}" — target ${formatDueDate(action.dueDate)}.${noteAside}`;
     }
     await prisma.chatFollowUp.create({
       data: { userId: sender.id, itemType: "goal", itemId: goal.id, itemTitle: action.title },
     });
-    return `${pick(ACK_OPENERS)} I added a goal for ${firstName}: "${action.title}". Did you want to set a target date for this? Just tell me the date, or say "no rush" if not.`;
+    return `${pick(ACK_OPENERS)} I added a goal for ${firstName}: "${action.title}".${noteAside} Did you want to set a target date for this? Just tell me the date, or say "no rush" if not.`;
   }
 
   return "Sorry, something went wrong handling that.";

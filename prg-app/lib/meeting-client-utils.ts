@@ -4,7 +4,26 @@
 // kept in one place so the three stay in sync (formatting, status colors,
 // the fetch wrapper, etc).
 
+import { useEffect, useRef } from "react";
 import type { SeriesData } from "./meeting-types";
+
+// Saves `value` automatically a moment after the user stops typing, instead
+// of requiring a manual Save button. Skips the very first render (that's
+// just the value already loaded from the server, not a new edit), and
+// cancels a pending save if the value changes again (or the component
+// unmounts) before the delay elapses, so we only ever send the latest text.
+export function useAutosave(value: string, onSave: (value: string) => void, delayMs = 700) {
+  const isFirstRender = useRef(true);
+  useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
+    const handle = setTimeout(() => onSave(value), delayMs);
+    return () => clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+}
 
 export const fmtDate = (d: Date) =>
   d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });

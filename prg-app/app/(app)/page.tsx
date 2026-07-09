@@ -2,8 +2,8 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { getCurrentViewer } from "@/lib/auth";
 import { ALL_SECTIONS, ZOOM_LINK } from "@/lib/sections";
-import { formatMeetingDateTime } from "@/lib/format";
 import ZoomJoinButton from "@/components/ZoomJoinButton";
+import LocalMeetingTime from "@/components/LocalMeetingTime";
 
 export const dynamic = "force-dynamic";
 
@@ -100,7 +100,7 @@ export default async function HomePage() {
               <div className="m-info">
                 <div className="m-title">{series.name}</div>
                 <div className="m-meta">
-                  {formatMeetingDateTime(new Date(instance.startsAt))} · {series.durationMins} min ·{" "}
+                  <LocalMeetingTime iso={instance.startsAt.toISOString()} durationMins={series.durationMins} /> ·{" "}
                   {instance.series.participants.map((p) => p.user.name.split(" ")[0]).join(", ")}
                 </div>
               </div>

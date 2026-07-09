@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { AgendaItemData, MeetingManagementData, SeriesData, TaskData, UserLite } from "@/lib/meeting-types";
-import { apiJson, fmtDate, fmtDueDate, fmtTime, monthLabel } from "@/lib/meeting-client-utils";
+import { apiJson, fmtDate, fmtDueDate, fmtTime, monthLabel, useAutosave } from "@/lib/meeting-client-utils";
 
 // ---------- component ----------
 
@@ -170,6 +170,8 @@ export default function MeetingApp({
           assigneeId: task.assigneeId,
           agendaItemId: item.id,
           meetingRefs: [],
+          goalId: null,
+          goalTitle: null,
         },
       ],
       series: d.series.map((s) => ({
@@ -603,6 +605,8 @@ function AgendaItemCard({
   const addedBy = userById(item.addedById);
   const linkedTasks = item.taskIds.map(tasksById).filter(Boolean) as TaskData[];
 
+  useAutosave(notes, (n) => onSaveNotes(item, n));
+
   return (
     <div className={"agenda-item" + (item.discussed ? " discussed" : "")}>
       <div className="ai-row">
@@ -624,12 +628,6 @@ function AgendaItemCard({
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
           />
-          <div className="ai-actions">
-            <button className="btn" onClick={() => onSaveNotes(item, notes)}>
-              Save note
-            </button>
-            {notes.trim() && <span className="saved-tag">✓ Saved</span>}
-          </div>
 
           {linkedTasks.map((lt) => (
             <div key={lt.id} className="task-chip">

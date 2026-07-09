@@ -37,6 +37,8 @@ export async function getMeetingManagementData(): Promise<MeetingManagementData>
     taskIdsByAgendaItem.set(t.agendaItemId, arr);
   }
 
+  const goalTitleById = new Map(goals.map((g) => [g.id, g.title]));
+
   const toRefs = (
     refs: Array<{
       id: string;
@@ -51,6 +53,20 @@ export async function getMeetingManagementData(): Promise<MeetingManagementData>
       instanceId: r.instanceId,
       startsAt: r.instance.startsAt.toISOString(),
     }));
+
+  const allTaskData = tasks.map((t) => ({
+    id: t.id,
+    title: t.title,
+    notes: t.notes,
+    done: t.done,
+    archived: t.archived,
+    dueDate: t.dueDate ? t.dueDate.toISOString() : null,
+    assigneeId: t.assigneeId,
+    agendaItemId: t.agendaItemId,
+    meetingRefs: toRefs(t.meetingRefs),
+    goalId: t.goalId,
+    goalTitle: t.goalId ? goalTitleById.get(t.goalId) ?? null : null,
+  }));
 
   return {
     users: users.map((u) => ({
@@ -86,17 +102,7 @@ export async function getMeetingManagementData(): Promise<MeetingManagementData>
         })),
       })),
     })),
-    tasks: tasks.map((t) => ({
-      id: t.id,
-      title: t.title,
-      notes: t.notes,
-      done: t.done,
-      archived: t.archived,
-      dueDate: t.dueDate ? t.dueDate.toISOString() : null,
-      assigneeId: t.assigneeId,
-      agendaItemId: t.agendaItemId,
-      meetingRefs: toRefs(t.meetingRefs),
-    })),
+    tasks: allTaskData,
     goals: goals.map((g) => ({
       id: g.id,
       title: g.title,
@@ -107,6 +113,7 @@ export async function getMeetingManagementData(): Promise<MeetingManagementData>
       dueDate: g.dueDate ? g.dueDate.toISOString() : null,
       assigneeId: g.assigneeId,
       meetingRefs: toRefs(g.meetingRefs),
+      subtasks: allTaskData.filter((t) => t.goalId === g.id && !t.archived),
     })),
   };
 }

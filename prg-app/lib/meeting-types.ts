@@ -55,6 +55,11 @@ export type TaskData = {
   assigneeId: string | null;
   agendaItemId: string | null;
   meetingRefs: MeetingRef[];
+  // set if this task is a sub-task of a goal (see GoalData.subtasks) —
+  // goalTitle is included so the Todos list can show "part of goal: X"
+  // without a separate lookup
+  goalId: string | null;
+  goalTitle: string | null;
 };
 
 export type GoalData = {
@@ -67,6 +72,10 @@ export type GoalData = {
   dueDate: string | null;
   assigneeId: string | null;
   meetingRefs: MeetingRef[];
+  // sub-tasks that make up this goal — used for the nested task list and
+  // progress bar. Always the goal's non-archived sub-tasks (archived ones,
+  // i.e. deleted, are left out so they don't skew progress).
+  subtasks: TaskData[];
 };
 
 export type MeetingManagementData = {
