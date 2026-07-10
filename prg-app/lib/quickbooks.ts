@@ -291,37 +291,18 @@ export async function getGasSpend(fromISO: string, toISO: string): Promise<numbe
   return round2(total);
 }
 
-function daysInMonth(year: number, month: number): number {
-  // month is 1-based; day 0 of "next month" is the last day of this one.
-  return new Date(Date.UTC(year, month, 0)).getUTCDate();
-}
-
-// The monthly goal, prorated by actual calendar-month overlap rather than
-// a flat days-in-range / average-days-per-month ratio — that average
-// (30.4368) made a full 30-day month like June come out to ~$3,942
-// instead of exactly $4,000, which is wrong: a complete calendar month
-// should equal the full goal regardless of whether it has 28, 30, or 31
-// days. Sums each touched month's (overlapping days / days in that month).
+// The monthly goal times the number of distinct calendar months the range
+// touches — no day-level proration at all (per Tim: a partial/in-progress
+// month, like "This Month" on day 10 of 31, should still compare against
+// the FULL flat monthly goal, not a fraction of it). "This Month" and
+// "Last Month" both touch exactly one month, so both compare against
+// exactly one goal's worth; "YTD" touches however many months have
+// started so far this year, each counted as a full month.
 function goalForRange(fromISO: string, toISO: string, monthlyGoal: number): number {
-  const [fy, fm, fd] = fromISO.split("-").map(Number);
-  const [ty, tm, td] = toISO.split("-").map(Number);
-
-  let total = 0;
-  let y = fy;
-  let m = fm;
-  while (y < ty || (y === ty && m <= tm)) {
-    const dim = daysInMonth(y, m);
-    const startDay = y === fy && m === fm ? fd : 1;
-    const endDay = y === ty && m === tm ? td : dim;
-    total += monthlyGoal * ((endDay - startDay + 1) / dim);
-
-    m += 1;
-    if (m > 12) {
-      m = 1;
-      y += 1;
-    }
-  }
-  return round2(total);
+  const [fy, fm] = fromISO.split("-").map(Number);
+  const [ty, tm] = toISO.split("-").map(Number);
+  const monthsTouched = (ty - fy) * 12 + (tm - fm) + 1;
+  return round2(monthlyGoal * monthsTouched);
 }
 
 export async function getMaintenanceFinancials(fromISO: string, toISO: string) {

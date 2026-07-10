@@ -290,40 +290,6 @@ export default function MaintenanceDashboard({
             </div>
           </div>
 
-          {isAdmin && (
-            <div style={{ marginTop: -6, marginBottom: 4 }}>
-              {editingGoal ? (
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <span style={{ fontSize: 12.5, color: "var(--text-muted)" }}>Monthly goal ($)</span>
-                  <input
-                    type="number"
-                    min={1}
-                    value={goalInput}
-                    onChange={(e) => setGoalInput(e.target.value)}
-                    style={{ width: 100 }}
-                  />
-                  <button type="button" className="btn primary" disabled={savingGoal} onClick={saveGoal}>
-                    {savingGoal ? "Saving…" : "Save"}
-                  </button>
-                  <button type="button" className="btn" disabled={savingGoal} onClick={() => setEditingGoal(false)}>
-                    Cancel
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => {
-                    setGoalInput(monthlyGoal != null ? String(monthlyGoal) : "");
-                    setEditingGoal(true);
-                  }}
-                >
-                  Edit monthly goal{monthlyGoal != null ? ` (currently ${formatCurrency(monthlyGoal)}/mo)` : ""}
-                </button>
-              )}
-            </div>
-          )}
-
           <SubLabel>Maintenance labor (hrs)</SubLabel>
           <div className="stat-row" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
             <div className="stat-tile">
@@ -357,6 +323,43 @@ export default function MaintenanceDashboard({
         <div className="card" style={{ padding: 20 }}>
           <MaintenanceTrendChart data={trend} />
         </div>
+      )}
+
+      {isAdmin && (
+        <>
+          <div className="section-label">Admin — net labor goal</div>
+          <div className="card" style={{ padding: 16 }}>
+            {editingGoal ? (
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span style={{ fontSize: 12.5, color: "var(--text-muted)" }}>Monthly goal ($)</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={goalInput}
+                  onChange={(e) => setGoalInput(e.target.value)}
+                  style={{ width: 100 }}
+                />
+                <button type="button" className="btn primary" disabled={savingGoal} onClick={saveGoal}>
+                  {savingGoal ? "Saving…" : "Save"}
+                </button>
+                <button type="button" className="btn" disabled={savingGoal} onClick={() => setEditingGoal(false)}>
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  setGoalInput(monthlyGoal != null ? String(monthlyGoal) : "");
+                  setEditingGoal(true);
+                }}
+              >
+                Edit monthly goal{monthlyGoal != null ? ` (currently ${formatCurrency(monthlyGoal)}/mo)` : ""}
+              </button>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
