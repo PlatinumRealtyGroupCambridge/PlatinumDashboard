@@ -47,14 +47,17 @@ function round2(n: number) {
 }
 
 // QuickBooks caps each query response at 1000 rows — this fetches every
-// page for a given date range until a short page signals the end.
-async function queryAll(entity: string, whereClause: string): Promise<Record<string, unknown>[]> {
+// page until a short page signals the end. whereClause is optional since
+// not every entity needs (or reliably supports) filtering — e.g. Account
+// doesn't allow filtering by AcctNum, so resolveGasAccountIds below fetches
+// every account and filters in JS instead.
+async function queryAll(entity: string, whereClause?: string): Promise<Record<string, unknown>[]> {
   const results: Record<string, unknown>[] = [];
   let startPosition = 1;
   const pageSize = 1000;
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const query = `SELECT * FROM ${entity} WHERE ${whereClause} STARTPOSITION ${startPosition} MAXRESULTS ${pageSize}`;
+    const query = `SELECT * FROM ${entity}${whereClause ? ` WHERE ${whereClause}` : ""} STARTPOSITION ${startPosition} MAXRESULTS ${pageSize}`;
     const json = (await fetchQuickBooksApi("query", { query })) as {
       QueryResponse?: Record<string, Record<string, unknown>[]>;
     };
@@ -205,13 +208,15 @@ type Account = { Id?: string; AcctNum?: string; Name?: string };
 // Resolves GAS_ACCOUNT_NUMBERS to their actual QuickBooks account ids —
 // account refs on expense lines carry an id (AccountRef.value), so
 // matching by id is what actually works, unlike matching by name text.
-// One query per account number rather than a single OR'd query —
-// QuickBooks' query language is unreliable with combined OR conditions.
+// Fetches every account (no WHERE filter) and matches AcctNum in JS,
+// rather than filtering via the query language — AcctNum isn't a
+// reliably filterable field for Account in QuickBooks' query API, which
+// was causing this whole lookup to fail.
 async function resolveGasAccountIds(): Promise<Set<string>> {
-  const results = await Promise.all(
-    GAS_ACCOUNT_NUMBERS.map((num) => queryAll("Account", `AcctNum = '${num}'`) as Promise<Account[]>)
+  const accounts = (await queryAll("Account")) as Account[];
+  return new Set(
+    accounts.filter((a) => a.AcctNum && GAS_ACCOUNT_NUMBERS.includes(a.AcctNum)).map((a) => a.Id).filter((id): id is string => !!id)
   );
-  return new Set(results.flat().map((a) => a.Id).filter((id): id is string => !!id));
 }
 
 // Sums expense lines coded to accounts 6113/6713 across Purchases (card
