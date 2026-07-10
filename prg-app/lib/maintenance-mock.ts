@@ -43,14 +43,13 @@ function round2(n: number) {
 const HISTORY_DAYS = 420;
 
 type WorkOrder = { id: string; openedAt: string; plannedDurationDays: number; lastUpdatedAt: string };
-type MaintenanceTransaction = {
-  id: string;
-  date: string;
-  laborHours: number;
-  laborBilled: number;
-  tripCharge: number;
-  gasSpend: number;
-};
+// Gross labor lines (the 17 real Products & Services) and discount lines
+// (the 2 "Discount - Labor - Maintenance" items) are modeled separately,
+// mirroring how they'll come back as two different QuickBooks item groups
+// once wired up for real — the discount lines carry negative $ and hours,
+// same sign convention QuickBooks uses.
+type LaborLine = { id: string; date: string; hours: number; billed: number };
+type OtherTransaction = { id: string; date: string; tripCharge: number; gasSpend: number };
 
 function buildWorkOrders(todayISO: string): WorkOrder[] {
   const rand = mulberry32(20260709);
@@ -82,17 +81,45 @@ function buildWorkOrders(todayISO: string): WorkOrder[] {
   return orders;
 }
 
-function buildTransactions(todayISO: string): MaintenanceTransaction[] {
+// Stand-in for the 17 real "Labor - Property Manager" / "Labor -
+// Maintenance Tech" / "Landscape Services" items — gross, before discounts.
+function buildLaborLines(todayISO: string): LaborLine[] {
   const rand = mulberry32(918273645);
-  const txns: MaintenanceTransaction[] = [];
+  const lines: LaborLine[] = [];
   for (let i = 0; i < 340; i++) {
     const date = addDays(todayISO, -Math.floor(rand() * HISTORY_DAYS));
-    const laborHours = Math.round((0.5 + rand() * 7.5) * 4) / 4; // quarter-hour increments
+    const hours = Math.round((0.5 + rand() * 7.5) * 4) / 4; // quarter-hour increments
     const hourlyRate = 58 + rand() * 27; // $58–$85/hr
-    const laborBilled = round2(laborHours * hourlyRate);
+    const billed = round2(hours * hourlyRate);
+    lines.push({ id: `ll-${i}`, date, hours, billed });
+  }
+  return lines;
+}
+
+// Stand-in for "501 - Discount - Labor - Maintenance - HOA" and
+// "502 - Discount - Labor - Maintenance - RENTAL" — a smaller, occasional
+// set of lines with negative $ and hours, same sign QuickBooks stores them
+// with, so summing them alongside the gross lines nets them out correctly.
+function buildDiscountLines(todayISO: string): LaborLine[] {
+  const rand = mulberry32(357111317);
+  const lines: LaborLine[] = [];
+  for (let i = 0; i < 55; i++) {
+    const date = addDays(todayISO, -Math.floor(rand() * HISTORY_DAYS));
+    const hours = -(Math.round((0.25 + rand() * 2) * 4) / 4);
+    const billed = -round2(30 + rand() * 220);
+    lines.push({ id: `dl-${i}`, date, hours, billed });
+  }
+  return lines;
+}
+
+function buildOtherTransactions(todayISO: string): OtherTransaction[] {
+  const rand = mulberry32(482910335);
+  const txns: OtherTransaction[] = [];
+  for (let i = 0; i < 340; i++) {
+    const date = addDays(todayISO, -Math.floor(rand() * HISTORY_DAYS));
     const tripCharge = rand() < 0.7 ? [35, 45, 65][Math.floor(rand() * 3)] : 0;
     const gasSpend = round2(rand() * 14);
-    txns.push({ id: `mt-${i}`, date, laborHours, laborBilled, tripCharge, gasSpend });
+    txns.push({ id: `ot-${i}`, date, tripCharge, gasSpend });
   }
   return txns;
 }
@@ -127,12 +154,24 @@ export function getRangeTotals(fromISO: string, toISO: string, todayISO: string)
       ? round2(closedInRange.reduce((sum, o) => sum + o.plannedDurationDays, 0) / closedInRange.length)
       : null;
 
-  const txns = buildTransactions(todayISO).filter((t) => t.date >= fromISO && t.date <= toISO);
+  const laborLines = buildLaborLines(todayISO).filter((l) => l.date >= fromISO && l.date <= toISO);
+  const discountLines = buildDiscountLines(todayISO).filter((l) => l.date >= fromISO && l.date <= toISO);
+  const laborBilledGross = round2(laborLines.reduce((sum, l) => sum + l.billed, 0));
+  const laborDiscount = round2(discountLines.reduce((sum, l) => sum + l.billed, 0));
+  const laborHoursGross = round2(laborLines.reduce((sum, l) => sum + l.hours, 0));
+  const laborHoursDiscount = round2(discountLines.reduce((sum, l) => sum + l.hours, 0));
+
+  const otherTxns = buildOtherTransactions(todayISO).filter((t) => t.date >= fromISO && t.date <= toISO);
+
   return {
     avgDaysToClose,
-    laborBilled: round2(txns.reduce((sum, t) => sum + t.laborBilled, 0)),
-    laborHours: round2(txns.reduce((sum, t) => sum + t.laborHours, 0)),
-    tripChargeRevenue: round2(txns.reduce((sum, t) => sum + t.tripCharge, 0)),
-    gasSpend: round2(txns.reduce((sum, t) => sum + t.gasSpend, 0)),
+    laborBilledGross,
+    laborDiscount,
+    laborBilledNet: round2(laborBilledGross + laborDiscount),
+    laborHoursGross,
+    laborHoursDiscount,
+    laborHoursNet: round2(laborHoursGross + laborHoursDiscount),
+    tripChargeRevenue: round2(otherTxns.reduce((sum, t) => sum + t.tripCharge, 0)),
+    gasSpend: round2(otherTxns.reduce((sum, t) => sum + t.gasSpend, 0)),
   };
 }

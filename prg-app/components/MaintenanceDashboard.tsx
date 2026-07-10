@@ -6,12 +6,33 @@ import { formatCurrency, formatHours } from "@/lib/format";
 type DayStats = { openWorkOrders: number; needsAttention: number };
 type RangeTotals = {
   avgDaysToClose: number | null;
-  laborBilled: number;
-  laborHours: number;
+  laborBilledGross: number;
+  laborDiscount: number;
+  laborBilledNet: number;
+  laborHoursGross: number;
+  laborHoursDiscount: number;
+  laborHoursNet: number;
   tripChargeRevenue: number;
   gasSpend: number;
 };
 type Preset = "this_month" | "last_month" | "ytd" | "custom";
+
+function SubLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        fontSize: 11,
+        fontWeight: 700,
+        textTransform: "uppercase",
+        letterSpacing: "0.05em",
+        color: "var(--text-muted)",
+        margin: "18px 0 8px",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
 
 function todayInput() {
   const d = new Date();
@@ -145,14 +166,6 @@ export default function MaintenanceDashboard({ label, blurb }: { label: string; 
           </div>
         </div>
         <div className="stat-tile">
-          <div className="label">Total maintenance labor billed ($)</div>
-          <div className="value">{loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.laborBilled) : "—"}</div>
-        </div>
-        <div className="stat-tile">
-          <div className="label">Total maintenance labor billed (hrs)</div>
-          <div className="value">{loading ? "—" : rangeTotals ? formatHours(rangeTotals.laborHours) : "—"}</div>
-        </div>
-        <div className="stat-tile">
           <div className="label">Total trip charge revenue</div>
           <div className="value">
             {loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.tripChargeRevenue) : "—"}
@@ -161,6 +174,38 @@ export default function MaintenanceDashboard({ label, blurb }: { label: string; 
         <div className="stat-tile">
           <div className="label">Total gas spend</div>
           <div className="value">{loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.gasSpend) : "—"}</div>
+        </div>
+      </div>
+
+      <SubLabel>Maintenance labor ($)</SubLabel>
+      <div className="stat-row" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
+        <div className="stat-tile">
+          <div className="label">Gross labor billed</div>
+          <div className="value">{loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.laborBilledGross) : "—"}</div>
+        </div>
+        <div className="stat-tile">
+          <div className="label">Labor discounted</div>
+          <div className="value">{loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.laborDiscount) : "—"}</div>
+        </div>
+        <div className="stat-tile">
+          <div className="label">Net labor billed</div>
+          <div className="value">{loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.laborBilledNet) : "—"}</div>
+        </div>
+      </div>
+
+      <SubLabel>Maintenance labor (hrs)</SubLabel>
+      <div className="stat-row" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
+        <div className="stat-tile">
+          <div className="label">Gross labor billed</div>
+          <div className="value">{loading ? "—" : rangeTotals ? formatHours(rangeTotals.laborHoursGross) : "—"}</div>
+        </div>
+        <div className="stat-tile">
+          <div className="label">Labor discounted</div>
+          <div className="value">{loading ? "—" : rangeTotals ? formatHours(rangeTotals.laborHoursDiscount) : "—"}</div>
+        </div>
+        <div className="stat-tile">
+          <div className="label">Net labor billed</div>
+          <div className="value">{loading ? "—" : rangeTotals ? formatHours(rangeTotals.laborHoursNet) : "—"}</div>
         </div>
       </div>
     </div>
