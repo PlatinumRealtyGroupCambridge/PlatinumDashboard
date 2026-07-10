@@ -49,15 +49,19 @@ export async function middleware(req: NextRequest) {
 
   // Always allow the login page itself and its API route, Next.js
   // internals and static assets (logo images, favicon) referenced by the
-  // login page or by the browser before a session exists, and the Google
+  // login page or by the browser before a session exists, the Google
   // Chat webhook — Google's servers can't carry our session cookie, so
   // that route authenticates each request itself (a signed token from
   // Google, verified in lib/google-chat-auth.ts) instead of relying on
-  // this cookie check.
+  // this cookie check — and the Privacy Policy / Terms of Use pages,
+  // which QuickBooks' app-review checklist needs to load publicly (see
+  // app/privacy, app/terms).
   if (
     pathname.startsWith("/login") ||
     pathname.startsWith("/api/login") ||
     pathname.startsWith("/api/google-chat") ||
+    pathname.startsWith("/privacy") ||
+    pathname.startsWith("/terms") ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon") ||
     pathname.startsWith("/icon") ||
