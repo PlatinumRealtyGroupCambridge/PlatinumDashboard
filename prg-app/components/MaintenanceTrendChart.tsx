@@ -43,7 +43,7 @@ export default function MaintenanceTrendChart({ data }: { data: TrendPoint[] }) 
   const [visible, setVisible] = useState<Record<LineKey, boolean>>({
     netLaborBilled: true,
     tripChargeRevenue: true,
-    gasSpend: false,
+    gasSpend: true,
     goal: true,
   });
 
