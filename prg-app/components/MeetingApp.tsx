@@ -549,6 +549,8 @@ function MeetingsCalendar({
   onOpen: (seriesId: string, instanceId: string) => void;
   onSwitchView: () => void;
 }) {
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
+
   const today = new Date();
   const ref = new Date(today.getFullYear(), today.getMonth() + monthOffset, 1);
   const year = ref.getFullYear();
@@ -577,10 +579,12 @@ function MeetingsCalendar({
     const cellDate = new Date(year, month, dayNum);
     const key = cellDate.toISOString().slice(0, 10);
     const dayMeetings = (byDate.get(key) ?? []).sort((a, b) => a.date.getTime() - b.date.getTime());
+    const expanded = expandedKey === key;
+    const shown = expanded ? dayMeetings : dayMeetings.slice(0, 3);
     cells.push(
       <div key={i} className={"cal-cell" + (inMonth ? "" : " out") + (key === todayKey ? " today" : "")}>
         <div className="cal-daynum">{inMonth ? dayNum : ""}</div>
-        {dayMeetings.slice(0, 3).map((m) => (
+        {shown.map((m) => (
           <button
             key={m.instanceId}
             className="cal-pill"
@@ -594,7 +598,11 @@ function MeetingsCalendar({
             {fmtTime(m.date)} {m.series.name.replace("1-on-1: Tim & ", "")}
           </button>
         ))}
-        {dayMeetings.length > 3 && <div className="cal-more">+{dayMeetings.length - 3} more</div>}
+        {dayMeetings.length > 3 && (
+          <button type="button" className="cal-more" onClick={() => setExpandedKey(expanded ? null : key)}>
+            {expanded ? "Show less" : `+${dayMeetings.length - 3} more`}
+          </button>
+        )}
       </div>
     );
   }
