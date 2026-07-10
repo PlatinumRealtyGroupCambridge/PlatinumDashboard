@@ -1,4 +1,25 @@
 import { fetchQuickBooksApi } from "./quickbooks-auth";
+import { prisma } from "./prisma";
+
+// Net Labor monthly goal — stored in the existing AppMeta key/value table
+// (no dedicated table needed) so admins can change it from
+// /maintenance without a deploy. Falls back to $4,000 if never set.
+const NET_LABOR_GOAL_KEY = "maintenance_net_labor_goal";
+const DEFAULT_NET_LABOR_MONTHLY_GOAL = 4000;
+
+export async function getNetLaborMonthlyGoal(): Promise<number> {
+  const row = await prisma.appMeta.findUnique({ where: { key: NET_LABOR_GOAL_KEY } });
+  const parsed = row ? Number(row.value) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_NET_LABOR_MONTHLY_GOAL;
+}
+
+export async function setNetLaborMonthlyGoal(value: number): Promise<void> {
+  await prisma.appMeta.upsert({
+    where: { key: NET_LABOR_GOAL_KEY },
+    update: { value: String(value) },
+    create: { key: NET_LABOR_GOAL_KEY, value: String(value) },
+  });
+}
 
 // The 17 real Products & Services that count toward "Total Maintenance
 // Labor Billed" (gross, before discounts) — see Tim's spec. Matched
@@ -155,21 +176,29 @@ function ymd(iso: string) {
 }
 
 // One data point per month for the trailing `monthsBack` months (including
-// the current month, which will be partial) — net labor billed and trip
-// charge revenue, fetched in a single Invoice/SalesReceipt query over the
+// the current month, which will be partial) — net labor billed, trip
+// charge revenue, and gas spend, fetched in one set of queries over the
 // whole window rather than one query per month. Backs the trend chart on
-// the Maintenance Dashboard.
+// the Maintenance Dashboard. The goal line uses the current admin-set
+// goal flat across all 12 months (not attempting to reconstruct what the
+// goal used to be if it's changed over time).
 export async function getMonthlyTrend(todayISO: string, monthsBack = 12) {
   const monthKeys = trailingMonthKeys(todayISO, monthsBack);
   const fromISO = `${monthKeys[0]}-01`;
   const whereClause = `TxnDate >= '${fromISO}' AND TxnDate <= '${todayISO}'`;
-  const [invoices, salesReceipts] = await Promise.all([
+
+  const [invoices, salesReceipts, gasAccountIds, purchases, bills, monthlyGoal] = await Promise.all([
     queryAll("Invoice", whereClause),
     queryAll("SalesReceipt", whereClause),
+    resolveGasAccountIds(),
+    queryAll("Purchase", whereClause),
+    queryAll("Bill", whereClause),
+    getNetLaborMonthlyGoal(),
   ]);
 
   const netLaborByMonth = new Map<string, number>();
   const tripChargeByMonth = new Map<string, number>();
+  const gasByMonth = new Map<string, number>();
 
   for (const txn of [...invoices, ...salesReceipts] as SalesTxn[]) {
     const txnDate = txn.TxnDate;
@@ -189,11 +218,26 @@ export async function getMonthlyTrend(todayISO: string, monthsBack = 12) {
     }
   }
 
+  for (const txn of [...purchases, ...bills]) {
+    const txnDate = (txn as { TxnDate?: string }).TxnDate;
+    if (!txnDate) continue;
+    const key = monthKey(txnDate);
+    const lines = (txn.Line as ExpenseLine[] | undefined) ?? [];
+    for (const line of lines) {
+      if (line.DetailType !== "AccountBasedExpenseLineDetail") continue;
+      const accountId = line.AccountBasedExpenseLineDetail?.AccountRef?.value;
+      if (accountId && gasAccountIds.has(accountId)) {
+        gasByMonth.set(key, (gasByMonth.get(key) ?? 0) + (line.Amount ?? 0));
+      }
+    }
+  }
+
   return monthKeys.map((key) => ({
     month: key,
     netLaborBilled: round2(netLaborByMonth.get(key) ?? 0),
     tripChargeRevenue: round2(tripChargeByMonth.get(key) ?? 0),
-    goal: NET_LABOR_MONTHLY_GOAL,
+    gasSpend: round2(gasByMonth.get(key) ?? 0),
+    goal: monthlyGoal,
   }));
 }
 
@@ -247,33 +291,46 @@ export async function getGasSpend(fromISO: string, toISO: string): Promise<numbe
   return round2(total);
 }
 
-// Net Labor goal — currently a single hardcoded figure rather than an
-// admin-editable setting; if Tim ever wants to change or track it over
-// time, that's a small follow-up (e.g. a Goal row or an env var), not a
-// big change to this calculation.
-const NET_LABOR_MONTHLY_GOAL = 4000;
-const AVG_DAYS_PER_MONTH = 365.25 / 12;
-
-function daysInclusive(fromISO: string, toISO: string): number {
-  const a = new Date(`${fromISO}T00:00:00Z`).getTime();
-  const b = new Date(`${toISO}T00:00:00Z`).getTime();
-  return Math.round((b - a) / 86400000) + 1;
+function daysInMonth(year: number, month: number): number {
+  // month is 1-based; day 0 of "next month" is the last day of this one.
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
-// The $4,000/mo goal prorated to however many days the selected range
-// covers, so "This Month" compares against ~$4,000, "YTD" against
-// ~7 months' worth, and a custom range against its own length — rather
-// than a flat $4,000 that would be meaningless outside a single month.
-function goalForRange(fromISO: string, toISO: string): number {
-  return round2((NET_LABOR_MONTHLY_GOAL * daysInclusive(fromISO, toISO)) / AVG_DAYS_PER_MONTH);
+// The monthly goal, prorated by actual calendar-month overlap rather than
+// a flat days-in-range / average-days-per-month ratio — that average
+// (30.4368) made a full 30-day month like June come out to ~$3,942
+// instead of exactly $4,000, which is wrong: a complete calendar month
+// should equal the full goal regardless of whether it has 28, 30, or 31
+// days. Sums each touched month's (overlapping days / days in that month).
+function goalForRange(fromISO: string, toISO: string, monthlyGoal: number): number {
+  const [fy, fm, fd] = fromISO.split("-").map(Number);
+  const [ty, tm, td] = toISO.split("-").map(Number);
+
+  let total = 0;
+  let y = fy;
+  let m = fm;
+  while (y < ty || (y === ty && m <= tm)) {
+    const dim = daysInMonth(y, m);
+    const startDay = y === fy && m === fm ? fd : 1;
+    const endDay = y === ty && m === tm ? td : dim;
+    total += monthlyGoal * ((endDay - startDay + 1) / dim);
+
+    m += 1;
+    if (m > 12) {
+      m = 1;
+      y += 1;
+    }
+  }
+  return round2(total);
 }
 
 export async function getMaintenanceFinancials(fromISO: string, toISO: string) {
-  const [laborAndTripCharge, gasSpend] = await Promise.all([
+  const [laborAndTripCharge, gasSpend, monthlyGoal] = await Promise.all([
     getLaborAndTripChargeTotals(fromISO, toISO),
     getGasSpend(fromISO, toISO),
+    getNetLaborMonthlyGoal(),
   ]);
-  const goal = goalForRange(fromISO, toISO);
+  const goal = goalForRange(fromISO, toISO, monthlyGoal);
   const netLaborGoalPercent = goal > 0 ? round2((laborAndTripCharge.laborBilledNet / goal) * 100) : null;
   const netLaborGoalDelta = round2(laborAndTripCharge.laborBilledNet - goal);
   return { ...laborAndTripCharge, gasSpend, netLaborGoal: goal, netLaborGoalPercent, netLaborGoalDelta };

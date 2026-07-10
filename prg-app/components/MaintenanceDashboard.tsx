@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { formatCurrency, formatHours } from "@/lib/format";
 import MaintenanceTrendChart from "./MaintenanceTrendChart";
 
-type TrendPoint = { month: string; netLaborBilled: number; tripChargeRevenue: number; goal: number };
+type TrendPoint = { month: string; netLaborBilled: number; tripChargeRevenue: number; gasSpend: number; goal: number };
 
 type DayStats = { openWorkOrders: number; needsAttention: number };
 type RangeTotals = {
@@ -51,7 +51,15 @@ const PRESET_LABELS: Record<Exclude<Preset, "custom">, string> = {
   ytd: "Year to date",
 };
 
-export default function MaintenanceDashboard({ label, blurb }: { label: string; blurb: string }) {
+export default function MaintenanceDashboard({
+  label,
+  blurb,
+  isAdmin,
+}: {
+  label: string;
+  blurb: string;
+  isAdmin: boolean;
+}) {
   const [preset, setPreset] = useState<Preset>("this_month");
   const [from, setFrom] = useState(todayInput());
   const [to, setTo] = useState(todayInput());
@@ -63,9 +71,49 @@ export default function MaintenanceDashboard({ label, blurb }: { label: string; 
   const [error, setError] = useState<string | null>(null);
   const [trend, setTrend] = useState<TrendPoint[] | null>(null);
   const [trendError, setTrendError] = useState<string | null>(null);
+  const [monthlyGoal, setMonthlyGoal] = useState<number | null>(null);
+  const [editingGoal, setEditingGoal] = useState(false);
+  const [goalInput, setGoalInput] = useState("");
+  const [savingGoal, setSavingGoal] = useState(false);
+  const [refreshNonce, setRefreshNonce] = useState(0);
+
+  // Admin-only: the raw monthly goal figure (not the prorated per-range
+  // value shown in the tiles below), fetched once for the edit control.
+  useEffect(() => {
+    if (!isAdmin) return;
+    fetch("/api/maintenance/goal")
+      .then((res) => res.json())
+      .then((json) => {
+        if (typeof json.goal === "number") setMonthlyGoal(json.goal);
+      })
+      .catch(() => {});
+  }, [isAdmin]);
+
+  async function saveGoal() {
+    const value = Number(goalInput);
+    if (!Number.isFinite(value) || value <= 0) return;
+    setSavingGoal(true);
+    try {
+      const res = await fetch("/api/maintenance/goal", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ goal: value }),
+      });
+      const json = await res.json();
+      if (res.ok && typeof json.goal === "number") {
+        setMonthlyGoal(json.goal);
+        setEditingGoal(false);
+        // Re-fetch the summary so the tiles reflect the new goal right away.
+        setRefreshNonce((n) => n + 1);
+      }
+    } finally {
+      setSavingGoal(false);
+    }
+  }
 
   // Trailing-12-month trend is independent of the date-range filter above,
-  // so it's fetched once rather than on every preset/date change.
+  // so it's fetched once (and again after a goal edit, via refreshNonce)
+  // rather than on every preset/date change.
   useEffect(() => {
     fetch("/api/maintenance/trend")
       .then(async (res) => {
@@ -75,7 +123,7 @@ export default function MaintenanceDashboard({ label, blurb }: { label: string; 
         else setTrendError(json.error ?? "Couldn't load trend data.");
       })
       .catch((err) => setTrendError(err instanceof Error ? err.message : "Failed to load trend data."));
-  }, []);
+  }, [refreshNonce]);
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -97,7 +145,7 @@ export default function MaintenanceDashboard({ label, blurb }: { label: string; 
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load maintenance stats."))
       .finally(() => setLoading(false));
-  }, [preset, from, to]);
+  }, [preset, from, to, refreshNonce]);
 
   return (
     <div>
@@ -227,7 +275,7 @@ export default function MaintenanceDashboard({ label, blurb }: { label: string; 
             <div className="stat-tile">
               <div className="label">% of net labor goal</div>
               <div className="value">
-                {loading ? "—" : rangeTotals?.netLaborGoalPercent != null ? `${rangeTotals.netLaborGoalPercent.toFixed(0)}%` : "—"}
+                {loading ? "—" : rangeTotals?.netLaborGoalPercent != null ? `${rangeTotals.netLaborGoalPercent.toFixed(2)}%` : "—"}
               </div>
             </div>
             <div className="stat-tile">
@@ -241,6 +289,40 @@ export default function MaintenanceDashboard({ label, blurb }: { label: string; 
               </div>
             </div>
           </div>
+
+          {isAdmin && (
+            <div style={{ marginTop: -6, marginBottom: 4 }}>
+              {editingGoal ? (
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <span style={{ fontSize: 12.5, color: "var(--text-muted)" }}>Monthly goal ($)</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={goalInput}
+                    onChange={(e) => setGoalInput(e.target.value)}
+                    style={{ width: 100 }}
+                  />
+                  <button type="button" className="btn primary" disabled={savingGoal} onClick={saveGoal}>
+                    {savingGoal ? "Saving…" : "Save"}
+                  </button>
+                  <button type="button" className="btn" disabled={savingGoal} onClick={() => setEditingGoal(false)}>
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => {
+                    setGoalInput(monthlyGoal != null ? String(monthlyGoal) : "");
+                    setEditingGoal(true);
+                  }}
+                >
+                  Edit monthly goal{monthlyGoal != null ? ` (currently ${formatCurrency(monthlyGoal)}/mo)` : ""}
+                </button>
+              )}
+            </div>
+          )}
 
           <SubLabel>Maintenance labor (hrs)</SubLabel>
           <div className="stat-row" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>

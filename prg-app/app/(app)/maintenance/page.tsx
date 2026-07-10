@@ -25,5 +25,5 @@ export default async function MaintenancePage() {
     );
   }
 
-  return <MaintenanceDashboard label={section.label} blurb={section.blurb} />;
+  return <MaintenanceDashboard label={section.label} blurb={section.blurb} isAdmin={viewer.isAdmin} />;
 }
