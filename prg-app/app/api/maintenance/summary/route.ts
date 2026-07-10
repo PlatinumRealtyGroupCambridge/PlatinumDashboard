@@ -1,13 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentViewer } from "@/lib/auth";
 import { nyTodayISO } from "@/lib/timezone";
-import { getOpenWorkOrderStats, getRangeTotals } from "@/lib/maintenance-mock";
+import { getOpenWorkOrderStats, getAvgDaysToClose } from "@/lib/maintenance-mock";
+import { getMaintenanceFinancials } from "@/lib/quickbooks";
+import { QuickBooksReconnectRequiredError } from "@/lib/quickbooks-auth";
 
 // Backs the Maintenance Dashboard (components/MaintenanceDashboard.tsx).
-// Currently computes everything from lib/maintenance-mock.ts's fake data —
-// once Rentvine/QuickBooks are connected, this route is the only place
-// that needs to change; the page and component can stay as-is since they
-// just call this same URL shape.
+// Work-order stats (open count, needs-attention, avg days to close) are
+// still fake, pending a Rentvine connection — see lib/maintenance-mock.ts.
+// The labor/trip-charge/gas totals are real, pulled live from QuickBooks
+// via lib/quickbooks.ts. If that call fails (not connected, API error),
+// this deliberately returns rangeTotals: null with an explanatory message
+// rather than silently falling back to fake numbers that could be
+// mistaken for real ones on a financial dashboard.
 //
 // Query params: ?preset=this_month|last_month|ytd|custom, and for
 // "custom", &from=YYYY-MM-DD&to=YYYY-MM-DD.
@@ -72,7 +77,22 @@ export async function GET(req: NextRequest) {
   }
 
   const dayStats = getOpenWorkOrderStats(todayISO);
-  const rangeTotals = getRangeTotals(fromISO, toISO, todayISO);
+  const avgDaysToClose = getAvgDaysToClose(fromISO, toISO, todayISO);
 
-  return NextResponse.json({ dayStats, rangeTotals, range: { from: fromISO, to: toISO } });
+  let rangeTotals: (Awaited<ReturnType<typeof getMaintenanceFinancials>> & { avgDaysToClose: number | null }) | null =
+    null;
+  let financialsError: string | null = null;
+  try {
+    const financials = await getMaintenanceFinancials(fromISO, toISO);
+    rangeTotals = { avgDaysToClose, ...financials };
+  } catch (err) {
+    if (err instanceof QuickBooksReconnectRequiredError) {
+      financialsError = "QuickBooks isn't connected — an admin needs to reconnect it on the QuickBooks Connection page.";
+    } else {
+      console.error("Maintenance dashboard: QuickBooks financials failed", err);
+      financialsError = "Couldn't load QuickBooks data right now — please try again in a moment.";
+    }
+  }
+
+  return NextResponse.json({ dayStats, rangeTotals, financialsError, range: { from: fromISO, to: toISO } });
 }

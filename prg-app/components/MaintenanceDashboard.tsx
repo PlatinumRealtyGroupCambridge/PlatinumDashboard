@@ -51,6 +51,7 @@ export default function MaintenanceDashboard({ label, blurb }: { label: string; 
   const [to, setTo] = useState(todayInput());
   const [dayStats, setDayStats] = useState<DayStats | null>(null);
   const [rangeTotals, setRangeTotals] = useState<RangeTotals | null>(null);
+  const [financialsError, setFinancialsError] = useState<string | null>(null);
   const [rangeShown, setRangeShown] = useState<{ from: string; to: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +71,7 @@ export default function MaintenanceDashboard({ label, blurb }: { label: string; 
         if (!res.ok) throw new Error(json?.error || "Failed to load maintenance stats.");
         setDayStats(json.dayStats);
         setRangeTotals(json.rangeTotals);
+        setFinancialsError(json.financialsError ?? null);
         setRangeShown(json.range);
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load maintenance stats."))
@@ -81,6 +83,9 @@ export default function MaintenanceDashboard({ label, blurb }: { label: string; 
       <h1 className="page-title">{label}</h1>
       <p className="page-sub">{blurb}</p>
 
+      {error && <div className="login-error">{error}</div>}
+
+      <div className="section-label">Today</div>
       <div
         style={{
           display: "inline-flex",
@@ -93,19 +98,15 @@ export default function MaintenanceDashboard({ label, blurb }: { label: string; 
           border: "1px solid var(--border)",
           borderRadius: 999,
           padding: "5px 12px",
-          marginBottom: 22,
+          marginBottom: 14,
         }}
       >
         <span
           className="dot"
           style={{ background: "var(--series-brown)", width: 8, height: 8, borderRadius: "50%" }}
         />
-        Sample data for now — not yet connected to Rentvine or QuickBooks
+        Sample data for now — not yet connected to Rentvine
       </div>
-
-      {error && <div className="login-error">{error}</div>}
-
-      <div className="section-label">Today</div>
       <div className="stat-row" style={{ gridTemplateColumns: "repeat(2, 1fr)" }}>
         <div className="stat-tile">
           <div className="label"># of open work orders</div>
@@ -158,56 +159,71 @@ export default function MaintenanceDashboard({ label, blurb }: { label: string; 
         </p>
       )}
 
-      <div className="stat-row" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
-        <div className="stat-tile">
-          <div className="label">Days to close a work order (avg)</div>
-          <div className="value">
-            {loading ? "—" : rangeTotals?.avgDaysToClose != null ? `${rangeTotals.avgDaysToClose.toFixed(1)} days` : "—"}
+      {!loading && financialsError ? (
+        <div className="card" style={{ padding: 20, marginBottom: 16 }}>
+          <p style={{ color: "var(--critical)", fontSize: 13.5, margin: 0, fontWeight: 600 }}>
+            Couldn&apos;t load QuickBooks data
+          </p>
+          <p style={{ color: "var(--text-muted)", fontSize: 13, margin: "6px 0 0" }}>{financialsError}</p>
+        </div>
+      ) : (
+        <>
+          <div className="stat-row" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
+            <div className="stat-tile">
+              <div className="label">Days to close a work order (avg)</div>
+              <div className="value">
+                {loading ? "—" : rangeTotals?.avgDaysToClose != null ? `${rangeTotals.avgDaysToClose.toFixed(1)} days` : "—"}
+              </div>
+            </div>
+            <div className="stat-tile">
+              <div className="label">Total trip charge revenue</div>
+              <div className="value">
+                {loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.tripChargeRevenue) : "—"}
+              </div>
+            </div>
+            <div className="stat-tile">
+              <div className="label">Total gas spend</div>
+              <div className="value">{loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.gasSpend) : "—"}</div>
+            </div>
           </div>
-        </div>
-        <div className="stat-tile">
-          <div className="label">Total trip charge revenue</div>
-          <div className="value">
-            {loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.tripChargeRevenue) : "—"}
+
+          <SubLabel>Maintenance labor ($)</SubLabel>
+          <div className="stat-row" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
+            <div className="stat-tile">
+              <div className="label">Gross labor billed</div>
+              <div className="value">
+                {loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.laborBilledGross) : "—"}
+              </div>
+            </div>
+            <div className="stat-tile">
+              <div className="label">Labor discounted</div>
+              <div className="value">{loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.laborDiscount) : "—"}</div>
+            </div>
+            <div className="stat-tile">
+              <div className="label">Net labor billed</div>
+              <div className="value">{loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.laborBilledNet) : "—"}</div>
+            </div>
           </div>
-        </div>
-        <div className="stat-tile">
-          <div className="label">Total gas spend</div>
-          <div className="value">{loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.gasSpend) : "—"}</div>
-        </div>
-      </div>
 
-      <SubLabel>Maintenance labor ($)</SubLabel>
-      <div className="stat-row" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
-        <div className="stat-tile">
-          <div className="label">Gross labor billed</div>
-          <div className="value">{loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.laborBilledGross) : "—"}</div>
-        </div>
-        <div className="stat-tile">
-          <div className="label">Labor discounted</div>
-          <div className="value">{loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.laborDiscount) : "—"}</div>
-        </div>
-        <div className="stat-tile">
-          <div className="label">Net labor billed</div>
-          <div className="value">{loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.laborBilledNet) : "—"}</div>
-        </div>
-      </div>
-
-      <SubLabel>Maintenance labor (hrs)</SubLabel>
-      <div className="stat-row" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
-        <div className="stat-tile">
-          <div className="label">Gross labor billed</div>
-          <div className="value">{loading ? "—" : rangeTotals ? formatHours(rangeTotals.laborHoursGross) : "—"}</div>
-        </div>
-        <div className="stat-tile">
-          <div className="label">Labor discounted</div>
-          <div className="value">{loading ? "—" : rangeTotals ? formatHours(rangeTotals.laborHoursDiscount) : "—"}</div>
-        </div>
-        <div className="stat-tile">
-          <div className="label">Net labor billed</div>
-          <div className="value">{loading ? "—" : rangeTotals ? formatHours(rangeTotals.laborHoursNet) : "—"}</div>
-        </div>
-      </div>
+          <SubLabel>Maintenance labor (hrs)</SubLabel>
+          <div className="stat-row" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
+            <div className="stat-tile">
+              <div className="label">Gross labor billed</div>
+              <div className="value">{loading ? "—" : rangeTotals ? formatHours(rangeTotals.laborHoursGross) : "—"}</div>
+            </div>
+            <div className="stat-tile">
+              <div className="label">Labor discounted</div>
+              <div className="value">
+                {loading ? "—" : rangeTotals ? formatHours(rangeTotals.laborHoursDiscount) : "—"}
+              </div>
+            </div>
+            <div className="stat-tile">
+              <div className="label">Net labor billed</div>
+              <div className="value">{loading ? "—" : rangeTotals ? formatHours(rangeTotals.laborHoursNet) : "—"}</div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
