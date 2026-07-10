@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentViewer } from "@/lib/auth";
 import Sidebar from "@/components/Sidebar";
+import PageNotes from "@/components/PageNotes";
 
 export const dynamic = "force-dynamic";
 
@@ -35,7 +36,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       </header>
       <div className="app-shell">
         <Sidebar isAdmin={viewer.isAdmin} allowedSections={viewer.allowedSections} />
-        <main id="app">{children}</main>
+        <main id="app">
+          {children}
+          {viewer.isAdmin && <PageNotes />}
+        </main>
       </div>
     </>
   );

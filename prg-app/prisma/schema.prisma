@@ -116,6 +116,24 @@ model User {
   // logged in as this admin.
   meetingAttendance       MeetingAttendance[] @relation("MeetingAttendanceUser")
   meetingAttendanceMarked MeetingAttendance[] @relation("MeetingAttendanceMarkedBy")
+
+  pageNotesCreated PageNote[]
+}
+
+// Admin-only freeform notes for future development ideas/thoughts, shown
+// at the bottom of every page (see components/PageNotes.tsx, rendered from
+// app/(app)/layout.tsx). pageKey is the pathname the note was left on
+// (e.g. "/maintenance", "/admin/quickbooks") so notes are scoped per page
+// rather than dumped into one global list.
+model PageNote {
+  id          String   @id @default(cuid())
+  pageKey     String
+  content     String
+  createdById String?
+  createdBy   User?    @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@index([pageKey, createdAt])
 }
 
 // A rolling window of recent Google Chat turns per person (both what they
