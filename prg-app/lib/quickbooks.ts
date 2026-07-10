@@ -123,6 +123,77 @@ export async function getLaborAndTripChargeTotals(fromISO: string, toISO: string
   };
 }
 
+type SalesTxn = { TxnDate?: string; Line?: SalesLine[] };
+
+function monthKey(txnDate: string): string {
+  return txnDate.slice(0, 7); // "YYYY-MM"
+}
+
+// The trailing N months (oldest first) as "YYYY-MM" keys, including the
+// current in-progress month.
+function trailingMonthKeys(todayISO: string, count: number): string[] {
+  const { y, m } = ymd(todayISO);
+  const keys: string[] = [];
+  for (let i = count - 1; i >= 0; i--) {
+    const total = (y * 12 + (m - 1)) - i;
+    const year = Math.floor(total / 12);
+    const month = (total % 12) + 1;
+    keys.push(`${year}-${pad(month)}`);
+  }
+  return keys;
+}
+
+function pad(n: number) {
+  return String(n).padStart(2, "0");
+}
+function ymd(iso: string) {
+  const [y, m] = iso.split("-").map(Number);
+  return { y, m };
+}
+
+// One data point per month for the trailing `monthsBack` months (including
+// the current month, which will be partial) — net labor billed and trip
+// charge revenue, fetched in a single Invoice/SalesReceipt query over the
+// whole window rather than one query per month. Backs the trend chart on
+// the Maintenance Dashboard.
+export async function getMonthlyTrend(todayISO: string, monthsBack = 12) {
+  const monthKeys = trailingMonthKeys(todayISO, monthsBack);
+  const fromISO = `${monthKeys[0]}-01`;
+  const whereClause = `TxnDate >= '${fromISO}' AND TxnDate <= '${todayISO}'`;
+  const [invoices, salesReceipts] = await Promise.all([
+    queryAll("Invoice", whereClause),
+    queryAll("SalesReceipt", whereClause),
+  ]);
+
+  const netLaborByMonth = new Map<string, number>();
+  const tripChargeByMonth = new Map<string, number>();
+
+  for (const txn of [...invoices, ...salesReceipts] as SalesTxn[]) {
+    const txnDate = txn.TxnDate;
+    if (!txnDate) continue;
+    const key = monthKey(txnDate);
+    for (const line of txn.Line ?? []) {
+      if (line.DetailType !== "SalesItemLineDetail") continue;
+      const itemName = line.SalesItemLineDetail?.ItemRef?.name;
+      if (!itemName) continue;
+      const amount = line.Amount ?? 0;
+
+      if (LABOR_ITEM_NAMES.has(itemName) || DISCOUNT_ITEM_NAMES.has(itemName)) {
+        netLaborByMonth.set(key, (netLaborByMonth.get(key) ?? 0) + amount);
+      } else if (itemName === TRIP_CHARGE_ITEM_NAME) {
+        tripChargeByMonth.set(key, (tripChargeByMonth.get(key) ?? 0) + amount);
+      }
+    }
+  }
+
+  return monthKeys.map((key) => ({
+    month: key,
+    netLaborBilled: round2(netLaborByMonth.get(key) ?? 0),
+    tripChargeRevenue: round2(tripChargeByMonth.get(key) ?? 0),
+    goal: NET_LABOR_MONTHLY_GOAL,
+  }));
+}
+
 type ExpenseLine = {
   DetailType?: string;
   Amount?: number;
@@ -134,10 +205,13 @@ type Account = { Id?: string; AcctNum?: string; Name?: string };
 // Resolves GAS_ACCOUNT_NUMBERS to their actual QuickBooks account ids —
 // account refs on expense lines carry an id (AccountRef.value), so
 // matching by id is what actually works, unlike matching by name text.
+// One query per account number rather than a single OR'd query —
+// QuickBooks' query language is unreliable with combined OR conditions.
 async function resolveGasAccountIds(): Promise<Set<string>> {
-  const filter = GAS_ACCOUNT_NUMBERS.map((num) => `AcctNum = '${num}'`).join(" OR ");
-  const accounts = (await queryAll("Account", filter)) as Account[];
-  return new Set(accounts.map((a) => a.Id).filter((id): id is string => !!id));
+  const results = await Promise.all(
+    GAS_ACCOUNT_NUMBERS.map((num) => queryAll("Account", `AcctNum = '${num}'`) as Promise<Account[]>)
+  );
+  return new Set(results.flat().map((a) => a.Id).filter((id): id is string => !!id));
 }
 
 // Sums expense lines coded to accounts 6113/6713 across Purchases (card
@@ -168,10 +242,34 @@ export async function getGasSpend(fromISO: string, toISO: string): Promise<numbe
   return round2(total);
 }
 
+// Net Labor goal — currently a single hardcoded figure rather than an
+// admin-editable setting; if Tim ever wants to change or track it over
+// time, that's a small follow-up (e.g. a Goal row or an env var), not a
+// big change to this calculation.
+const NET_LABOR_MONTHLY_GOAL = 4000;
+const AVG_DAYS_PER_MONTH = 365.25 / 12;
+
+function daysInclusive(fromISO: string, toISO: string): number {
+  const a = new Date(`${fromISO}T00:00:00Z`).getTime();
+  const b = new Date(`${toISO}T00:00:00Z`).getTime();
+  return Math.round((b - a) / 86400000) + 1;
+}
+
+// The $4,000/mo goal prorated to however many days the selected range
+// covers, so "This Month" compares against ~$4,000, "YTD" against
+// ~7 months' worth, and a custom range against its own length — rather
+// than a flat $4,000 that would be meaningless outside a single month.
+function goalForRange(fromISO: string, toISO: string): number {
+  return round2((NET_LABOR_MONTHLY_GOAL * daysInclusive(fromISO, toISO)) / AVG_DAYS_PER_MONTH);
+}
+
 export async function getMaintenanceFinancials(fromISO: string, toISO: string) {
   const [laborAndTripCharge, gasSpend] = await Promise.all([
     getLaborAndTripChargeTotals(fromISO, toISO),
     getGasSpend(fromISO, toISO),
   ]);
-  return { ...laborAndTripCharge, gasSpend };
+  const goal = goalForRange(fromISO, toISO);
+  const netLaborGoalPercent = goal > 0 ? round2((laborAndTripCharge.laborBilledNet / goal) * 100) : null;
+  const netLaborGoalDelta = round2(laborAndTripCharge.laborBilledNet - goal);
+  return { ...laborAndTripCharge, gasSpend, netLaborGoal: goal, netLaborGoalPercent, netLaborGoalDelta };
 }

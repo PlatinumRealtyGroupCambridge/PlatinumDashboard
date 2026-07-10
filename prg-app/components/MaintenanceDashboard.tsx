@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { formatCurrency, formatHours } from "@/lib/format";
+import MaintenanceTrendChart from "./MaintenanceTrendChart";
+
+type TrendPoint = { month: string; netLaborBilled: number; tripChargeRevenue: number; goal: number };
 
 type DayStats = { openWorkOrders: number; needsAttention: number };
 type RangeTotals = {
@@ -14,6 +17,9 @@ type RangeTotals = {
   laborHoursNet: number;
   tripChargeRevenue: number;
   gasSpend: number;
+  netLaborGoal: number;
+  netLaborGoalPercent: number | null;
+  netLaborGoalDelta: number;
 };
 type Preset = "this_month" | "last_month" | "ytd" | "custom";
 
@@ -55,6 +61,21 @@ export default function MaintenanceDashboard({ label, blurb }: { label: string; 
   const [rangeShown, setRangeShown] = useState<{ from: string; to: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [trend, setTrend] = useState<TrendPoint[] | null>(null);
+  const [trendError, setTrendError] = useState<string | null>(null);
+
+  // Trailing-12-month trend is independent of the date-range filter above,
+  // so it's fetched once rather than on every preset/date change.
+  useEffect(() => {
+    fetch("/api/maintenance/trend")
+      .then(async (res) => {
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json?.error || "Failed to load trend data.");
+        if (json.trend) setTrend(json.trend);
+        else setTrendError(json.error ?? "Couldn't load trend data.");
+      })
+      .catch((err) => setTrendError(err instanceof Error ? err.message : "Failed to load trend data."));
+  }, []);
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -203,6 +224,22 @@ export default function MaintenanceDashboard({ label, blurb }: { label: string; 
               <div className="label">Net labor billed</div>
               <div className="value">{loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.laborBilledNet) : "—"}</div>
             </div>
+            <div className="stat-tile">
+              <div className="label">% of net labor goal</div>
+              <div className="value">
+                {loading ? "—" : rangeTotals?.netLaborGoalPercent != null ? `${rangeTotals.netLaborGoalPercent.toFixed(0)}%` : "—"}
+              </div>
+            </div>
+            <div className="stat-tile">
+              <div className="label">$ vs. net labor goal</div>
+              <div className="value">
+                {loading
+                  ? "—"
+                  : rangeTotals
+                    ? `${rangeTotals.netLaborGoalDelta >= 0 ? "+" : ""}${formatCurrency(rangeTotals.netLaborGoalDelta)}`
+                    : "—"}
+              </div>
+            </div>
           </div>
 
           <SubLabel>Maintenance labor (hrs)</SubLabel>
@@ -223,6 +260,21 @@ export default function MaintenanceDashboard({ label, blurb }: { label: string; 
             </div>
           </div>
         </>
+      )}
+
+      <div className="section-label">Trend (last 12 months)</div>
+      {trendError && (
+        <div className="card" style={{ padding: 20 }}>
+          <p style={{ color: "var(--critical)", fontSize: 13.5, margin: 0, fontWeight: 600 }}>
+            Couldn&apos;t load trend data
+          </p>
+          <p style={{ color: "var(--text-muted)", fontSize: 13, margin: "6px 0 0" }}>{trendError}</p>
+        </div>
+      )}
+      {!trendError && trend && (
+        <div className="card" style={{ padding: 20 }}>
+          <MaintenanceTrendChart data={trend} />
+        </div>
       )}
     </div>
   );
