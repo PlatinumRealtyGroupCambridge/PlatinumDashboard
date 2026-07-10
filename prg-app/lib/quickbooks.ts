@@ -32,10 +32,15 @@ const DISCOUNT_ITEM_NAMES = new Set([
 
 const TRIP_CHARGE_ITEM_NAME = "303 - Trip Charge";
 
-// Ledger accounts gas spend is coded to — matched by name prefix since
-// line items carry the account's display name (e.g. "6113 Fuel"), not a
-// separate lookup by account number.
-const GAS_ACCOUNT_PREFIXES = ["6113", "6713"];
+// Ledger accounts gas spend is coded to, by their QuickBooks account
+// number (the AcctNum field) — NOT by name. Unlike the Products & Services
+// above (where the number is typed directly into the item's name, e.g.
+// "303 - Trip Charge"), accounts have the number in a separate AcctNum
+// field — an account's Name might just be "Maintenance Gas & Mileage
+// Reimbursement" with no "6713" in it anywhere, so matching on name text
+// silently finds nothing. getGasSpend() below resolves these to real
+// account ids first, then matches expense lines by id.
+const GAS_ACCOUNT_NUMBERS = ["6113", "6713"];
 
 function round2(n: number) {
   return Math.round(n * 100) / 100;
@@ -121,8 +126,19 @@ export async function getLaborAndTripChargeTotals(fromISO: string, toISO: string
 type ExpenseLine = {
   DetailType?: string;
   Amount?: number;
-  AccountBasedExpenseLineDetail?: { AccountRef?: { name?: string } };
+  AccountBasedExpenseLineDetail?: { AccountRef?: { value?: string; name?: string } };
 };
+
+type Account = { Id?: string; AcctNum?: string; Name?: string };
+
+// Resolves GAS_ACCOUNT_NUMBERS to their actual QuickBooks account ids —
+// account refs on expense lines carry an id (AccountRef.value), so
+// matching by id is what actually works, unlike matching by name text.
+async function resolveGasAccountIds(): Promise<Set<string>> {
+  const filter = GAS_ACCOUNT_NUMBERS.map((num) => `AcctNum = '${num}'`).join(" OR ");
+  const accounts = (await queryAll("Account", filter)) as Account[];
+  return new Set(accounts.map((a) => a.Id).filter((id): id is string => !!id));
+}
 
 // Sums expense lines coded to accounts 6113/6713 across Purchases (card
 // swipes, checks, cash expenses) and Bills (vendor invoices) in the date
@@ -132,15 +148,19 @@ type ExpenseLine = {
 // covered here (e.g. a manual Journal Entry) and this list needs expanding.
 export async function getGasSpend(fromISO: string, toISO: string): Promise<number> {
   const whereClause = `TxnDate >= '${fromISO}' AND TxnDate <= '${toISO}'`;
-  const [purchases, bills] = await Promise.all([queryAll("Purchase", whereClause), queryAll("Bill", whereClause)]);
+  const [gasAccountIds, purchases, bills] = await Promise.all([
+    resolveGasAccountIds(),
+    queryAll("Purchase", whereClause),
+    queryAll("Bill", whereClause),
+  ]);
 
   let total = 0;
   for (const txn of [...purchases, ...bills]) {
     const lines = (txn.Line as ExpenseLine[] | undefined) ?? [];
     for (const line of lines) {
       if (line.DetailType !== "AccountBasedExpenseLineDetail") continue;
-      const accountName = line.AccountBasedExpenseLineDetail?.AccountRef?.name;
-      if (accountName && GAS_ACCOUNT_PREFIXES.some((prefix) => accountName.startsWith(prefix))) {
+      const accountId = line.AccountBasedExpenseLineDetail?.AccountRef?.value;
+      if (accountId && gasAccountIds.has(accountId)) {
         total += line.Amount ?? 0;
       }
     }
