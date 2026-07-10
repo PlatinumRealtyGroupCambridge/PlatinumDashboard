@@ -53,15 +53,21 @@ export async function middleware(req: NextRequest) {
   // Chat webhook — Google's servers can't carry our session cookie, so
   // that route authenticates each request itself (a signed token from
   // Google, verified in lib/google-chat-auth.ts) instead of relying on
-  // this cookie check — and the Privacy Policy / Terms of Use pages,
-  // which QuickBooks' app-review checklist needs to load publicly (see
-  // app/privacy, app/terms).
+  // this cookie check — the Privacy Policy / Terms of Use pages, which
+  // QuickBooks' app-review checklist needs to load publicly (see
+  // app/privacy, app/terms) — and the QuickBooks disconnect callback,
+  // which QuickBooks can redirect to from its own "Connected Apps" screen
+  // without our session cookie present (see
+  // app/api/quickbooks/disconnect/route.ts). The connect/callback routes
+  // are deliberately NOT exempted here — they're only ever reached by an
+  // already-logged-in admin clicking through from /admin/quickbooks.
   if (
     pathname.startsWith("/login") ||
     pathname.startsWith("/api/login") ||
     pathname.startsWith("/api/google-chat") ||
     pathname.startsWith("/privacy") ||
     pathname.startsWith("/terms") ||
+    pathname.startsWith("/api/quickbooks/disconnect") ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon") ||
     pathname.startsWith("/icon") ||

@@ -62,6 +62,13 @@ export default function Sidebar({
             <span className="dot" style={{ background: "var(--text-muted)", width: 8, height: 8, borderRadius: "50%" }} />
             <span>Meeting Efficiency</span>
           </Link>
+          <Link
+            href="/admin/quickbooks"
+            className={"sidebar-item" + (pathname.startsWith("/admin/quickbooks") ? " active" : "")}
+          >
+            <span className="dot" style={{ background: "var(--text-muted)", width: 8, height: 8, borderRadius: "50%" }} />
+            <span>QuickBooks Connection</span>
+          </Link>
         </>
       )}
     </nav>
