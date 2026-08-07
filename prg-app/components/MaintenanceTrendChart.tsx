@@ -8,24 +8,30 @@ type TrendPoint = {
   netLaborBilled: number;
   tripChargeRevenue: number;
   gasSpend: number;
+  landscapingRevenue: number;
   goal: number;
+  landscapingGoal: number;
 };
 
-type LineKey = "netLaborBilled" | "tripChargeRevenue" | "gasSpend" | "goal";
+type LineKey = "netLaborBilled" | "tripChargeRevenue" | "gasSpend" | "landscapingRevenue" | "goal" | "landscapingGoal";
 
 const WIDTH = 760;
 const HEIGHT = 280;
 const PADDING = { top: 20, right: 20, bottom: 34, left: 60 };
 
 // Fixed order/colors, following the app's established categorical
-// sequence (blue, aqua, yellow, ...) — Goal is a dashed muted reference
-// line rather than a fourth bright hue, since it's a target, not a
-// measured quantity.
-const LINES: { key: LineKey; label: string; color: string; dashed?: boolean }[] = [
+// sequence (blue, aqua, yellow, green, ...) — the two goal lines are
+// dashed muted reference lines rather than bright hues, since they're
+// targets, not measured quantities. Different dash patterns (rather than
+// different colors) keep both goal lines visually distinct from each
+// other while still reading as "reference," not "data."
+const LINES: { key: LineKey; label: string; color: string; dashArray?: string }[] = [
   { key: "netLaborBilled", label: "Net labor billed", color: "var(--series-blue)" },
   { key: "tripChargeRevenue", label: "Trip charge revenue", color: "var(--series-aqua)" },
   { key: "gasSpend", label: "Gas spend", color: "var(--series-yellow)" },
-  { key: "goal", label: "Net labor goal", color: "var(--text-muted)", dashed: true },
+  { key: "landscapingRevenue", label: "Landscaping revenue", color: "var(--series-green)" },
+  { key: "goal", label: "Net labor goal", color: "var(--text-muted)", dashArray: "5 4" },
+  { key: "landscapingGoal", label: "Landscaping goal", color: "var(--text-muted)", dashArray: "2 3" },
 ];
 
 function monthLabel(key: string) {
@@ -34,9 +40,9 @@ function monthLabel(key: string) {
 }
 
 // Trailing-12-month line chart for Net Labor Billed, Trip Charge Revenue,
-// Gas Spend, and the Net Labor Goal — all four share one $ axis (same
-// unit, so no dual-axis needed). Click a legend entry to show/hide that
-// line; the axis scale stays fixed across all four regardless of what's
+// Gas Spend, Landscaping Revenue, and both goal lines — all six share one
+// $ axis (same unit, so no dual-axis needed). Click a legend entry to
+// show/hide that line; the axis scale stays fixed regardless of what's
 // toggled, so the chart doesn't jump around as lines are hidden.
 export default function MaintenanceTrendChart({ data }: { data: TrendPoint[] }) {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
@@ -44,7 +50,9 @@ export default function MaintenanceTrendChart({ data }: { data: TrendPoint[] }) 
     netLaborBilled: true,
     tripChargeRevenue: true,
     gasSpend: true,
+    landscapingRevenue: true,
     goal: true,
+    landscapingGoal: true,
   });
 
   if (data.length === 0) return null;
@@ -55,7 +63,12 @@ export default function MaintenanceTrendChart({ data }: { data: TrendPoint[] }) 
   const colWidth = plotW / (data.length || 1);
 
   const maxValue =
-    Math.max(1, ...data.map((d) => Math.max(d.netLaborBilled, d.tripChargeRevenue, d.gasSpend, d.goal))) * 1.1;
+    Math.max(
+      1,
+      ...data.map((d) =>
+        Math.max(d.netLaborBilled, d.tripChargeRevenue, d.gasSpend, d.landscapingRevenue, d.goal, d.landscapingGoal)
+      )
+    ) * 1.1;
 
   const xFor = (i: number) => PADDING.left + (data.length === 1 ? plotW / 2 : (i / stepCount) * plotW);
   const yFor = (v: number) => PADDING.top + plotH - (v / maxValue) * plotH;
@@ -89,7 +102,7 @@ export default function MaintenanceTrendChart({ data }: { data: TrendPoint[] }) 
               opacity: visible[line.key] ? 1 : 0.5,
             }}
           >
-            {line.dashed ? (
+            {line.dashArray ? (
               <span style={{ width: 14, borderTop: `2px dashed ${line.color}`, display: "inline-block" }} />
             ) : (
               <span style={{ width: 14, height: 2, background: line.color, display: "inline-block" }} />
@@ -142,7 +155,7 @@ export default function MaintenanceTrendChart({ data }: { data: TrendPoint[] }) 
                 strokeWidth={2}
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                strokeDasharray={line.dashed ? "5 4" : undefined}
+                strokeDasharray={line.dashArray}
               />
             )
         )}
@@ -161,7 +174,7 @@ export default function MaintenanceTrendChart({ data }: { data: TrendPoint[] }) 
           LINES.map(
             (line) =>
               visible[line.key] &&
-              !line.dashed && (
+              !line.dashArray && (
                 <circle key={line.key} cx={xFor(hoverIndex!)} cy={yFor(hovered[line.key])} r={4} fill={line.color} />
               )
           )}
@@ -184,7 +197,7 @@ export default function MaintenanceTrendChart({ data }: { data: TrendPoint[] }) 
         <div className="card" style={{ padding: "10px 14px", marginTop: 8, display: "inline-block", fontSize: 12.5 }}>
           <div style={{ fontWeight: 700, marginBottom: 4 }}>{monthLabel(hovered.month)}</div>
           {LINES.filter((line) => visible[line.key]).map((line) => (
-            <div key={line.key} style={{ color: line.dashed ? "var(--text-muted)" : undefined }}>
+            <div key={line.key} style={{ color: line.dashArray ? "var(--text-muted)" : undefined }}>
               {line.label}: {formatCurrency(hovered[line.key])}
             </div>
           ))}

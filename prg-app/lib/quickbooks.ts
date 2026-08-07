@@ -21,6 +21,25 @@ export async function setNetLaborMonthlyGoal(value: number): Promise<void> {
   });
 }
 
+// Landscaping monthly goal — same AppMeta pattern as Net Labor above, but
+// with no invented default dollar figure since Tim hasn't given one; stays
+// null (shown as "not set" in the UI) until an admin sets it.
+const LANDSCAPING_GOAL_KEY = "maintenance_landscaping_goal";
+
+export async function getLandscapingMonthlyGoal(): Promise<number | null> {
+  const row = await prisma.appMeta.findUnique({ where: { key: LANDSCAPING_GOAL_KEY } });
+  const parsed = row ? Number(row.value) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+export async function setLandscapingMonthlyGoal(value: number): Promise<void> {
+  await prisma.appMeta.upsert({
+    where: { key: LANDSCAPING_GOAL_KEY },
+    update: { value: String(value) },
+    create: { key: LANDSCAPING_GOAL_KEY, value: String(value) },
+  });
+}
+
 // The 17 real Products & Services that count toward "Total Maintenance
 // Labor Billed" (gross, before discounts) — see Tim's spec. Matched
 // against QuickBooks line items by exact name.
@@ -193,17 +212,20 @@ export async function getMonthlyTrend(todayISO: string, monthsBack = 12) {
   const fromISO = `${monthKeys[0]}-01`;
   const whereClause = `TxnDate >= '${fromISO}' AND TxnDate <= '${todayISO}'`;
 
-  const [invoices, salesReceipts, gasAccountIds, purchases, bills, monthlyGoal] = await Promise.all([
-    queryAll("Invoice", whereClause),
-    queryAll("SalesReceipt", whereClause),
-    resolveGasAccountIds(),
-    queryAll("Purchase", whereClause),
-    queryAll("Bill", whereClause),
-    getNetLaborMonthlyGoal(),
-  ]);
+  const [invoices, salesReceipts, gasAccountIds, purchases, bills, monthlyGoal, landscapingMonthlyGoal] =
+    await Promise.all([
+      queryAll("Invoice", whereClause),
+      queryAll("SalesReceipt", whereClause),
+      resolveGasAccountIds(),
+      queryAll("Purchase", whereClause),
+      queryAll("Bill", whereClause),
+      getNetLaborMonthlyGoal(),
+      getLandscapingMonthlyGoal(),
+    ]);
 
   const netLaborByMonth = new Map<string, number>();
   const tripChargeByMonth = new Map<string, number>();
+  const landscapingByMonth = new Map<string, number>();
   const gasByMonth = new Map<string, number>();
 
   for (const txn of [...invoices, ...salesReceipts] as SalesTxn[]) {
@@ -220,6 +242,8 @@ export async function getMonthlyTrend(todayISO: string, monthsBack = 12) {
         netLaborByMonth.set(key, (netLaborByMonth.get(key) ?? 0) + amount);
       } else if (itemName === TRIP_CHARGE_ITEM_NAME) {
         tripChargeByMonth.set(key, (tripChargeByMonth.get(key) ?? 0) + amount);
+      } else if (itemName === LANDSCAPING_ITEM_NAME) {
+        landscapingByMonth.set(key, (landscapingByMonth.get(key) ?? 0) + amount);
       }
     }
   }
@@ -243,7 +267,11 @@ export async function getMonthlyTrend(todayISO: string, monthsBack = 12) {
     netLaborBilled: round2(netLaborByMonth.get(key) ?? 0),
     tripChargeRevenue: round2(tripChargeByMonth.get(key) ?? 0),
     gasSpend: round2(gasByMonth.get(key) ?? 0),
+    landscapingRevenue: round2(landscapingByMonth.get(key) ?? 0),
     goal: monthlyGoal,
+    // 0 (not null) when unset, so the chart can render this line without
+    // special-casing a missing goal — toggling it off hides it either way.
+    landscapingGoal: landscapingMonthlyGoal ?? 0,
   }));
 }
 
@@ -312,13 +340,32 @@ function goalForRange(fromISO: string, toISO: string, monthlyGoal: number): numb
 }
 
 export async function getMaintenanceFinancials(fromISO: string, toISO: string) {
-  const [laborAndTripCharge, gasSpend, monthlyGoal] = await Promise.all([
+  const [laborAndTripCharge, gasSpend, netLaborMonthlyGoal, landscapingMonthlyGoal] = await Promise.all([
     getLaborAndTripChargeTotals(fromISO, toISO),
     getGasSpend(fromISO, toISO),
     getNetLaborMonthlyGoal(),
+    getLandscapingMonthlyGoal(),
   ]);
-  const goal = goalForRange(fromISO, toISO, monthlyGoal);
-  const netLaborGoalPercent = goal > 0 ? round2((laborAndTripCharge.laborBilledNet / goal) * 100) : null;
-  const netLaborGoalDelta = round2(laborAndTripCharge.laborBilledNet - goal);
-  return { ...laborAndTripCharge, gasSpend, netLaborGoal: goal, netLaborGoalPercent, netLaborGoalDelta };
+
+  const netLaborGoal = goalForRange(fromISO, toISO, netLaborMonthlyGoal);
+  const netLaborGoalPercent = netLaborGoal > 0 ? round2((laborAndTripCharge.laborBilledNet / netLaborGoal) * 100) : null;
+  const netLaborGoalDelta = round2(laborAndTripCharge.laborBilledNet - netLaborGoal);
+
+  const landscapingGoal = landscapingMonthlyGoal != null ? goalForRange(fromISO, toISO, landscapingMonthlyGoal) : null;
+  const landscapingGoalPercent =
+    landscapingGoal != null && landscapingGoal > 0
+      ? round2((laborAndTripCharge.landscapingRevenue / landscapingGoal) * 100)
+      : null;
+  const landscapingGoalDelta = landscapingGoal != null ? round2(laborAndTripCharge.landscapingRevenue - landscapingGoal) : null;
+
+  return {
+    ...laborAndTripCharge,
+    gasSpend,
+    netLaborGoal,
+    netLaborGoalPercent,
+    netLaborGoalDelta,
+    landscapingGoal,
+    landscapingGoalPercent,
+    landscapingGoalDelta,
+  };
 }

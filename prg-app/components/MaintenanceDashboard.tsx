@@ -4,7 +4,15 @@ import { useEffect, useState } from "react";
 import { formatCurrency, formatHours } from "@/lib/format";
 import MaintenanceTrendChart from "./MaintenanceTrendChart";
 
-type TrendPoint = { month: string; netLaborBilled: number; tripChargeRevenue: number; gasSpend: number; goal: number };
+type TrendPoint = {
+  month: string;
+  netLaborBilled: number;
+  tripChargeRevenue: number;
+  gasSpend: number;
+  landscapingRevenue: number;
+  goal: number;
+  landscapingGoal: number;
+};
 
 type DayStats = { openWorkOrders: number; needsAttention: number };
 type RangeTotals = {
@@ -21,6 +29,9 @@ type RangeTotals = {
   netLaborGoal: number;
   netLaborGoalPercent: number | null;
   netLaborGoalDelta: number;
+  landscapingGoal: number | null;
+  landscapingGoalPercent: number | null;
+  landscapingGoalDelta: number | null;
 };
 type Preset = "this_month" | "last_month" | "ytd" | "custom";
 
@@ -94,16 +105,26 @@ export default function MaintenanceDashboard({
   const [editingGoal, setEditingGoal] = useState(false);
   const [goalInput, setGoalInput] = useState("");
   const [savingGoal, setSavingGoal] = useState(false);
+  const [landscapingMonthlyGoal, setLandscapingMonthlyGoal] = useState<number | null>(null);
+  const [editingLandscapingGoal, setEditingLandscapingGoal] = useState(false);
+  const [landscapingGoalInput, setLandscapingGoalInput] = useState("");
+  const [savingLandscapingGoal, setSavingLandscapingGoal] = useState(false);
   const [refreshNonce, setRefreshNonce] = useState(0);
 
-  // Admin-only: the raw monthly goal figure (not the prorated per-range
-  // value shown in the tiles below), fetched once for the edit control.
+  // Admin-only: the raw monthly goal figures (not the prorated per-range
+  // values shown in the tiles below), fetched once for the edit controls.
   useEffect(() => {
     if (!isAdmin) return;
     fetch("/api/maintenance/goal")
       .then((res) => res.json())
       .then((json) => {
         if (typeof json.goal === "number") setMonthlyGoal(json.goal);
+      })
+      .catch(() => {});
+    fetch("/api/maintenance/landscaping-goal")
+      .then((res) => res.json())
+      .then((json) => {
+        if (typeof json.goal === "number") setLandscapingMonthlyGoal(json.goal);
       })
       .catch(() => {});
   }, [isAdmin]);
@@ -127,6 +148,27 @@ export default function MaintenanceDashboard({
       }
     } finally {
       setSavingGoal(false);
+    }
+  }
+
+  async function saveLandscapingGoal() {
+    const value = Number(landscapingGoalInput);
+    if (!Number.isFinite(value) || value <= 0) return;
+    setSavingLandscapingGoal(true);
+    try {
+      const res = await fetch("/api/maintenance/landscaping-goal", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ goal: value }),
+      });
+      const json = await res.json();
+      if (res.ok && typeof json.goal === "number") {
+        setLandscapingMonthlyGoal(json.goal);
+        setEditingLandscapingGoal(false);
+        setRefreshNonce((n) => n + 1);
+      }
+    } finally {
+      setSavingLandscapingGoal(false);
     }
   }
 
@@ -275,6 +317,28 @@ export default function MaintenanceDashboard({
               calculation="Sum of the '313 - Landscape Services' line item across all invoices and sales receipts in the selected range."
             />
             <StatTile
+              label="% of landscaping goal"
+              value={
+                loading
+                  ? "—"
+                  : rangeTotals?.landscapingGoalPercent != null
+                    ? `${rangeTotals.landscapingGoalPercent.toFixed(2)}%`
+                    : "Goal not set"
+              }
+              calculation="Total landscaping revenue divided by the landscaping goal for the selected range (the monthly goal x the number of calendar months the range touches), shown as a percentage. Set the goal in the admin section at the bottom of this page."
+            />
+            <StatTile
+              label="$ vs. landscaping goal"
+              value={
+                loading
+                  ? "—"
+                  : rangeTotals?.landscapingGoalDelta != null
+                    ? `${rangeTotals.landscapingGoalDelta >= 0 ? "+" : ""}${formatCurrency(rangeTotals.landscapingGoalDelta)}`
+                    : "Goal not set"
+              }
+              calculation="Total landscaping revenue minus the landscaping goal for the selected range. Positive means over goal, negative means under. Set the goal in the admin section at the bottom of this page."
+            />
+            <StatTile
               label="Total gas spend"
               value={loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.gasSpend) : "—"}
               calculation="Sum of expenses coded to QuickBooks ledger accounts 6113 and 6713, from Purchases and Bills in the selected range."
@@ -383,6 +447,45 @@ export default function MaintenanceDashboard({
                 }}
               >
                 Edit monthly goal{monthlyGoal != null ? ` (currently ${formatCurrency(monthlyGoal)}/mo)` : ""}
+              </button>
+            )}
+          </div>
+
+          <div className="section-label">Admin — landscaping goal</div>
+          <div className="card" style={{ padding: 16 }}>
+            {editingLandscapingGoal ? (
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span style={{ fontSize: 12.5, color: "var(--text-muted)" }}>Monthly goal ($)</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={landscapingGoalInput}
+                  onChange={(e) => setLandscapingGoalInput(e.target.value)}
+                  style={{ width: 100 }}
+                />
+                <button type="button" className="btn primary" disabled={savingLandscapingGoal} onClick={saveLandscapingGoal}>
+                  {savingLandscapingGoal ? "Saving…" : "Save"}
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={savingLandscapingGoal}
+                  onClick={() => setEditingLandscapingGoal(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  setLandscapingGoalInput(landscapingMonthlyGoal != null ? String(landscapingMonthlyGoal) : "");
+                  setEditingLandscapingGoal(true);
+                }}
+              >
+                Edit monthly goal
+                {landscapingMonthlyGoal != null ? ` (currently ${formatCurrency(landscapingMonthlyGoal)}/mo)` : " (not set yet)"}
               </button>
             )}
           </div>
