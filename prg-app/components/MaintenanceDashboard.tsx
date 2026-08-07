@@ -16,6 +16,7 @@ type RangeTotals = {
   laborHoursDiscount: number;
   laborHoursNet: number;
   tripChargeRevenue: number;
+  landscapingRevenue: number;
   gasSpend: number;
   netLaborGoal: number;
   netLaborGoalPercent: number | null;
@@ -36,6 +37,24 @@ function SubLabel({ children }: { children: React.ReactNode }) {
       }}
     >
       {children}
+    </div>
+  );
+}
+
+// Every metric's line-item/account makeup, shown as a hover tooltip on its
+// tile — see lib/quickbooks.ts for the actual matching logic these
+// descriptions summarize.
+const LABOR_ITEMS_TEXT =
+  "105/205 Property Manager – Business Hours, 106/206 – After Hours, 107/207 – Sundays & Holidays, 108/208 – Emergency Rate; 305/309 Maintenance Tech – Business Hours, 306/310 – After Hours, 307/311 – Sundays & Holidays, 308/312 – Emergency Rate (HOA/Rental pairs). Landscaping is tracked separately.";
+const DISCOUNT_ITEMS_TEXT =
+  "501 - Discount - Labor - Maintenance - HOA and 502 - Discount - Labor - Maintenance - RENTAL (stored as negative amounts in QuickBooks).";
+const RENTVINE_PENDING_TEXT = "Sample data for now — not yet connected to Rentvine.";
+
+function StatTile({ label, value, calculation }: { label: string; value: React.ReactNode; calculation: string }) {
+  return (
+    <div className="stat-tile" title={`Calculation: ${calculation}`}>
+      <div className="label">{label}</div>
+      <div className="value">{value}</div>
     </div>
   );
 }
@@ -177,14 +196,16 @@ export default function MaintenanceDashboard({
         Sample data for now — not yet connected to Rentvine
       </div>
       <div className="stat-row" style={{ gridTemplateColumns: "repeat(2, 1fr)" }}>
-        <div className="stat-tile">
-          <div className="label"># of open work orders</div>
-          <div className="value">{loading ? "—" : (dayStats?.openWorkOrders ?? "—")}</div>
-        </div>
-        <div className="stat-tile">
-          <div className="label"># of work orders that need attention (no update in 3+ days)</div>
-          <div className="value">{loading ? "—" : (dayStats?.needsAttention ?? "—")}</div>
-        </div>
+        <StatTile
+          label="# of open work orders"
+          value={loading ? "—" : (dayStats?.openWorkOrders ?? "—")}
+          calculation={`Work orders that are not yet closed, as of today. ${RENTVINE_PENDING_TEXT}`}
+        />
+        <StatTile
+          label="# of work orders that need attention (no update in 3+ days)"
+          value={loading ? "—" : (dayStats?.needsAttention ?? "—")}
+          calculation={`Open work orders with no update logged in 3 or more days. ${RENTVINE_PENDING_TEXT}`}
+        />
       </div>
 
       <div className="section-label">Work orders &amp; costs</div>
@@ -238,74 +259,80 @@ export default function MaintenanceDashboard({
       ) : (
         <>
           <div className="stat-row" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
-            <div className="stat-tile">
-              <div className="label">Days to close a work order (avg)</div>
-              <div className="value">
-                {loading ? "—" : rangeTotals?.avgDaysToClose != null ? `${rangeTotals.avgDaysToClose.toFixed(1)} days` : "—"}
-              </div>
-            </div>
-            <div className="stat-tile">
-              <div className="label">Total trip charge revenue</div>
-              <div className="value">
-                {loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.tripChargeRevenue) : "—"}
-              </div>
-            </div>
-            <div className="stat-tile">
-              <div className="label">Total gas spend</div>
-              <div className="value">{loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.gasSpend) : "—"}</div>
-            </div>
+            <StatTile
+              label="Days to close a work order (avg)"
+              value={loading ? "—" : rangeTotals?.avgDaysToClose != null ? `${rangeTotals.avgDaysToClose.toFixed(1)} days` : "—"}
+              calculation={`Average days between opening and closing, across work orders closed within the selected range. ${RENTVINE_PENDING_TEXT}`}
+            />
+            <StatTile
+              label="Total trip charge revenue"
+              value={loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.tripChargeRevenue) : "—"}
+              calculation="Sum of the '303 - Trip Charge' line item across all invoices and sales receipts in the selected range."
+            />
+            <StatTile
+              label="Total landscaping revenue"
+              value={loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.landscapingRevenue) : "—"}
+              calculation="Sum of the '313 - Landscape Services' line item across all invoices and sales receipts in the selected range."
+            />
+            <StatTile
+              label="Total gas spend"
+              value={loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.gasSpend) : "—"}
+              calculation="Sum of expenses coded to QuickBooks ledger accounts 6113 and 6713, from Purchases and Bills in the selected range."
+            />
           </div>
 
           <SubLabel>Maintenance labor ($)</SubLabel>
           <div className="stat-row" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
-            <div className="stat-tile">
-              <div className="label">Gross labor billed</div>
-              <div className="value">
-                {loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.laborBilledGross) : "—"}
-              </div>
-            </div>
-            <div className="stat-tile">
-              <div className="label">Labor discounted</div>
-              <div className="value">{loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.laborDiscount) : "—"}</div>
-            </div>
-            <div className="stat-tile">
-              <div className="label">Net labor billed</div>
-              <div className="value">{loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.laborBilledNet) : "—"}</div>
-            </div>
-            <div className="stat-tile">
-              <div className="label">% of net labor goal</div>
-              <div className="value">
-                {loading ? "—" : rangeTotals?.netLaborGoalPercent != null ? `${rangeTotals.netLaborGoalPercent.toFixed(2)}%` : "—"}
-              </div>
-            </div>
-            <div className="stat-tile">
-              <div className="label">$ vs. net labor goal</div>
-              <div className="value">
-                {loading
+            <StatTile
+              label="Gross labor billed"
+              value={loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.laborBilledGross) : "—"}
+              calculation={`Sum of these Products & Services (dollar amount): ${LABOR_ITEMS_TEXT}`}
+            />
+            <StatTile
+              label="Labor discounted"
+              value={loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.laborDiscount) : "—"}
+              calculation={`Sum of these Products & Services (dollar amount): ${DISCOUNT_ITEMS_TEXT}`}
+            />
+            <StatTile
+              label="Net labor billed"
+              value={loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.laborBilledNet) : "—"}
+              calculation="Gross labor billed plus Labor discounted (the discount is a negative number, so this nets it out)."
+            />
+            <StatTile
+              label="% of net labor goal"
+              value={loading ? "—" : rangeTotals?.netLaborGoalPercent != null ? `${rangeTotals.netLaborGoalPercent.toFixed(2)}%` : "—"}
+              calculation="Net labor billed divided by the goal for the selected range (the monthly goal x the number of calendar months the range touches), shown as a percentage."
+            />
+            <StatTile
+              label="$ vs. net labor goal"
+              value={
+                loading
                   ? "—"
                   : rangeTotals
                     ? `${rangeTotals.netLaborGoalDelta >= 0 ? "+" : ""}${formatCurrency(rangeTotals.netLaborGoalDelta)}`
-                    : "—"}
-              </div>
-            </div>
+                    : "—"
+              }
+              calculation="Net labor billed minus the goal for the selected range. Positive means over goal, negative means under."
+            />
           </div>
 
           <SubLabel>Maintenance labor (hrs)</SubLabel>
           <div className="stat-row" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
-            <div className="stat-tile">
-              <div className="label">Gross labor billed</div>
-              <div className="value">{loading ? "—" : rangeTotals ? formatHours(rangeTotals.laborHoursGross) : "—"}</div>
-            </div>
-            <div className="stat-tile">
-              <div className="label">Labor discounted</div>
-              <div className="value">
-                {loading ? "—" : rangeTotals ? formatHours(rangeTotals.laborHoursDiscount) : "—"}
-              </div>
-            </div>
-            <div className="stat-tile">
-              <div className="label">Net labor billed</div>
-              <div className="value">{loading ? "—" : rangeTotals ? formatHours(rangeTotals.laborHoursNet) : "—"}</div>
-            </div>
+            <StatTile
+              label="Gross labor billed"
+              value={loading ? "—" : rangeTotals ? formatHours(rangeTotals.laborHoursGross) : "—"}
+              calculation={`Sum of these Products & Services (quantity billed, in hours): ${LABOR_ITEMS_TEXT}`}
+            />
+            <StatTile
+              label="Labor discounted"
+              value={loading ? "—" : rangeTotals ? formatHours(rangeTotals.laborHoursDiscount) : "—"}
+              calculation={`Sum of these Products & Services (quantity, in hours): ${DISCOUNT_ITEMS_TEXT}`}
+            />
+            <StatTile
+              label="Net labor billed"
+              value={loading ? "—" : rangeTotals ? formatHours(rangeTotals.laborHoursNet) : "—"}
+              calculation="Gross labor billed (hrs) plus Labor discounted (hrs) (the discount is a negative number, so this nets it out)."
+            />
           </div>
         </>
       )}

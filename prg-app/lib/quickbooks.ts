@@ -41,8 +41,10 @@ const LABOR_ITEM_NAMES = new Set([
   "310 - Labor - Maintenance Tech - After Hours - RENTAL",
   "311 - Labor - Maintenance Tech - Sundays & Holidays - RENTAL",
   "312 - Labor - Maintenance Tech - Emergency Rate - RENTAL",
-  "313 - Landscape Services",
 ]);
+
+// Tracked as its own metric, not folded into labor.
+const LANDSCAPING_ITEM_NAME = "313 - Landscape Services";
 
 // Stored as negative $ and hours in QuickBooks — summing them in with the
 // gross items above nets them out, per Tim's instruction.
@@ -96,12 +98,12 @@ type SalesLine = {
   SalesItemLineDetail?: { ItemRef?: { name?: string }; Qty?: number };
 };
 
-// Sums the 17 labor items, 2 discount items, and Trip Charge item across
-// every Invoice and Sales Receipt in the date range. Both transaction
-// types share the same line-item shape (SalesItemLineDetail), and a
-// discount line typically sits right on the same invoice as the labor
-// line it's reducing, so one pass over both transaction types naturally
-// captures gross + discount + trip charge together.
+// Sums the 16 labor items, 2 discount items, Trip Charge item, and
+// Landscaping item across every Invoice and Sales Receipt in the date
+// range. Both transaction types share the same line-item shape
+// (SalesItemLineDetail), and a discount line typically sits right on the
+// same invoice as the labor line it's reducing, so one pass over both
+// transaction types naturally captures everything together.
 export async function getLaborAndTripChargeTotals(fromISO: string, toISO: string) {
   const whereClause = `TxnDate >= '${fromISO}' AND TxnDate <= '${toISO}'`;
   const [invoices, salesReceipts] = await Promise.all([
@@ -114,6 +116,7 @@ export async function getLaborAndTripChargeTotals(fromISO: string, toISO: string
   let laborDiscount = 0;
   let laborHoursDiscount = 0;
   let tripChargeRevenue = 0;
+  let landscapingRevenue = 0;
 
   for (const txn of [...invoices, ...salesReceipts]) {
     const lines = (txn.Line as SalesLine[] | undefined) ?? [];
@@ -132,6 +135,8 @@ export async function getLaborAndTripChargeTotals(fromISO: string, toISO: string
         laborHoursDiscount += qty;
       } else if (itemName === TRIP_CHARGE_ITEM_NAME) {
         tripChargeRevenue += amount;
+      } else if (itemName === LANDSCAPING_ITEM_NAME) {
+        landscapingRevenue += amount;
       }
     }
   }
@@ -144,6 +149,7 @@ export async function getLaborAndTripChargeTotals(fromISO: string, toISO: string
     laborHoursDiscount: round2(laborHoursDiscount),
     laborHoursNet: round2(laborHoursGross + laborHoursDiscount),
     tripChargeRevenue: round2(tripChargeRevenue),
+    landscapingRevenue: round2(landscapingRevenue),
   };
 }
 
