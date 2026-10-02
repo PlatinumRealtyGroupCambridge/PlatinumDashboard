@@ -306,7 +306,7 @@ const BASE_TOOLS = [
   {
     name: "ask_for_clarification",
     description:
-      "Use this when the sender is asking for an action (adding something, scheduling something, canceling something) but it's ambiguous, doesn't clearly map to a known meeting or person, or isn't something you can do (only add_agenda_item / add_task / add_goal / create_meeting / delete_meeting are supported). Do NOT use this for a plain greeting, thanks, or acknowledgment with no request — use small_talk for those instead.",
+      "Use this when the sender is asking for an action (adding something, scheduling something, canceling something) but it's ambiguous, doesn't clearly map to a known meeting or person, or isn't something you can do (only add_agenda_item / add_task / add_goal / create_meeting / delete_meeting are supported). Do NOT use this for a plain greeting, thanks, or acknowledgment with no request — use small_talk for those instead. If you're asking the sender to pick between two or more meetings from the provided list, refer to each one by its name (e.g. 'the Tuesday 1-on-1 with Matt') — never by its id, which means nothing to a person reading chat.",
     input_schema: {
       type: "object" as const,
       properties: { question: { type: "string" as const } },

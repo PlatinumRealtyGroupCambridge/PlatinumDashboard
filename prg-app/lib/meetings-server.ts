@@ -17,9 +17,15 @@ export async function getOrCreateNextInstance(seriesId: string) {
 
   const last = series.instances[series.instances.length - 1];
   const incrementDays = series.recurrenceIntervalDays ?? (series.type === "OWNERSHIP" ? 30 : 7);
-  const nextDate = last
-    ? new Date(last.startsAt.getTime() + incrementDays * 86400000)
-    : now;
+  let nextDate = last ? new Date(last.startsAt.getTime() + incrementDays * 86400000) : now;
+  // A single increment assumes this is being called shortly after the last
+  // known instance passed. If the series went quiet for longer than that
+  // (e.g. the app itself was down for a while), one increment can still
+  // land in the past — keep advancing until it's actually upcoming, rather
+  // than silently handing back a "next meeting" that's already over.
+  while (nextDate.getTime() < now.getTime()) {
+    nextDate = new Date(nextDate.getTime() + incrementDays * 86400000);
+  }
 
   return prisma.meetingInstance.create({
     data: { seriesId, startsAt: nextDate },
