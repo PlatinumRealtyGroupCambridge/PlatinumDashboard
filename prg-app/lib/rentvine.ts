@@ -74,22 +74,40 @@ function num(v: unknown): number | undefined {
   return undefined;
 }
 
-// The two "tied to today" metrics — not affected by the dashboard's date
-// range filter, always reflect the current moment. "Needs attention" is
-// an open work order with no status/note update logged in 3+ days (Tim's
-// definition — explicitly open AND stale, not just stale).
-export async function getOpenWorkOrderStats(
-  todayISO: string
-): Promise<{ openWorkOrders: number; needsAttention: number }> {
-  const openFilter: ReportFilter = { name: "primaryWorkOrderStatusID", comparator: "in", values: OPEN_PRIMARY_STATUSES };
-  const [openRows, staleRows] = await Promise.all([
-    runWorkOrderReport(["workOrderNumber"], [openFilter]),
+// The four "tied to today" metrics — not affected by the dashboard's date
+// range filter, always reflect the current moment. Pending/Open/On Hold
+// are Rentvine's own three non-closed primary statuses, split out as
+// separate KPIs (rather than one combined "open" count) so this matches
+// what Tim sees broken out in Rentvine's own dashboard. "Needs attention"
+// stays a single combined metric across all three — an open work order
+// (in any of those three statuses) with no status/note update logged in
+// 3+ days (Tim's definition — explicitly open AND stale, not just stale).
+export async function getOpenWorkOrderStats(todayISO: string): Promise<{
+  pendingWorkOrders: number;
+  openWorkOrders: number;
+  onHoldWorkOrders: number;
+  needsAttention: number;
+}> {
+  const statusFilter = (statusId: string): ReportFilter => ({
+    name: "primaryWorkOrderStatusID",
+    comparator: "equals",
+    value: statusId,
+  });
+  const [pendingRows, openRows, onHoldRows, staleRows] = await Promise.all([
+    runWorkOrderReport(["workOrderNumber"], [statusFilter("1")]),
+    runWorkOrderReport(["workOrderNumber"], [statusFilter("2")]),
+    runWorkOrderReport(["workOrderNumber"], [statusFilter("4")]),
     runWorkOrderReport(["workOrderNumber"], [
-      openFilter,
+      { name: "primaryWorkOrderStatusID", comparator: "in", values: OPEN_PRIMARY_STATUSES },
       { name: "dateTimeModified", comparator: "onOrBeforeDateRange", endDate: addDays(todayISO, -3) },
     ]),
   ]);
-  return { openWorkOrders: openRows.length, needsAttention: staleRows.length };
+  return {
+    pendingWorkOrders: pendingRows.length,
+    openWorkOrders: openRows.length,
+    onHoldWorkOrders: onHoldRows.length,
+    needsAttention: staleRows.length,
+  };
 }
 
 // Average days between opening and closing, across every work order

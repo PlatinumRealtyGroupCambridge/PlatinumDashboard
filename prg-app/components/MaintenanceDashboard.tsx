@@ -14,7 +14,7 @@ type TrendPoint = {
   landscapingGoal: number;
 };
 
-type DayStats = { openWorkOrders: number; needsAttention: number };
+type DayStats = { pendingWorkOrders: number; openWorkOrders: number; onHoldWorkOrders: number; needsAttention: number };
 type RangeTotals = {
   laborBilledGross: number;
   laborDiscount: number;
@@ -226,16 +226,26 @@ export default function MaintenanceDashboard({
           <p style={{ color: "var(--text-muted)", fontSize: 13, margin: "6px 0 0" }}>{rentvineError}</p>
         </div>
       ) : (
-        <div className="stat-row" style={{ gridTemplateColumns: "repeat(2, 1fr)" }}>
+        <div className="stat-row" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
+          <StatTile
+            label="# of pending work orders"
+            value={loading ? "—" : (dayStats?.pendingWorkOrders ?? "—")}
+            calculation="Work orders in Rentvine with a status of Requested (received, not yet assigned), as of today."
+          />
           <StatTile
             label="# of open work orders"
             value={loading ? "—" : (dayStats?.openWorkOrders ?? "—")}
-            calculation="Work orders in Rentvine with a status of Requested, Open, or On Hold, as of today."
+            calculation="Work orders in Rentvine with a status of Open, as of today. Matches Rentvine's own dashboard."
+          />
+          <StatTile
+            label="# of on hold work orders"
+            value={loading ? "—" : (dayStats?.onHoldWorkOrders ?? "—")}
+            calculation="Work orders in Rentvine with a status of On Hold (paused, awaiting something), as of today."
           />
           <StatTile
             label="# of work orders that need attention (no update in 3+ days)"
             value={loading ? "—" : (dayStats?.needsAttention ?? "—")}
-            calculation="Open work orders (Requested, Open, or On Hold) that haven't had a status or note update logged in 3 or more days, as of today."
+            calculation="Work orders in Rentvine with a status of Requested, Open, or On Hold that haven't had a status or note update logged in 3 or more days, as of today."
           />
         </div>
       )}
