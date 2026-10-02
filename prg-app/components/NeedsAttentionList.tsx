@@ -6,8 +6,8 @@ import Link from "next/link";
 type NeedsAttentionWorkOrder = {
   workOrderNumber: number;
   rentvineUrl: string;
-  propertyCode: string | null;
-  unitCode: string | null;
+  property: string | null;
+  unit: string | null;
   description: string;
   lastUpdated: string | null;
 };
@@ -85,7 +85,7 @@ export default function NeedsAttentionList({ label, isAdmin }: { label: string; 
                   <tr key={wo.workOrderNumber} style={{ borderTop: "1px solid var(--border)" }}>
                     <td style={{ padding: "10px 16px", whiteSpace: "nowrap" }}>{wo.workOrderNumber}</td>
                     <td style={{ padding: "10px 16px", whiteSpace: "nowrap" }}>
-                      {[wo.propertyCode, wo.unitCode].filter(Boolean).join(" / ") || "—"}
+                      {[wo.property, wo.unit].filter(Boolean).join(", ") || "—"}
                     </td>
                     <td style={{ padding: "10px 16px" }}>{wo.description}</td>
                     <td style={{ padding: "10px 16px", whiteSpace: "nowrap" }}>

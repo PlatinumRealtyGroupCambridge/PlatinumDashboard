@@ -14,12 +14,14 @@ import { fetchRentvineApi, rentvineAppUrl } from "./rentvine-auth";
 type ReportFilter = Record<string, unknown>;
 type ReportRow = Record<string, unknown>;
 
-// A row might come back as a keyed object ({ workOrderNumber: ..., ... }),
-// which is what getOpenWorkOrderStats' counts (row-array .length only,
-// never reading a field) couldn't have told us either way — or as a plain
-// positional array matching displayColumns' order, which a CSV/Excel-style
-// export commonly uses instead. Normalize either into a keyed object so
-// every caller can just read fields by name.
+// Confirmed via a real raw response (captured through the app's own
+// admin diagnostic after the field-access bug this replaces): each row in
+// the JSON export comes wrapped as { rowTypeID, data: {...named fields} }
+// rather than being the flat field object itself — and that `data` object
+// carries a full fixed baseline of fields (workOrderID, propertyAddress,
+// unitAddress, daysOpen, etc.) regardless of what displayColumns asked
+// for, all as strings even for numeric-looking values. Still tolerant of
+// a flatter shape or positional array, in case that ever changes.
 function normalizeRow(row: unknown, displayColumns: string[]): ReportRow | null {
   if (row == null) return null;
   if (Array.isArray(row)) {
@@ -29,7 +31,13 @@ function normalizeRow(row: unknown, displayColumns: string[]): ReportRow | null 
     });
     return obj;
   }
-  if (typeof row === "object") return row as ReportRow;
+  if (typeof row === "object") {
+    const r = row as Record<string, unknown>;
+    if (r.data && typeof r.data === "object" && !Array.isArray(r.data)) {
+      return r.data as ReportRow;
+    }
+    return r;
+  }
   return null;
 }
 
@@ -117,21 +125,11 @@ function str(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() !== "" ? v : undefined;
 }
 
-// Rentvine's own UI links to a work order by its internal numeric id (e.g.
-// /maintenance/work-orders/411), not the "WO #100411" number shown
-// everywhere else — confirmed against several real work orders in this
-// account where the difference was consistently exactly 100000 (WO
-// #100411 -> id 411, WO #100172 -> id 172, WO #100130 -> id 130). Not
-// documented anywhere, so if Rentvine ever changes this numbering scheme
-// these links would need revisiting — but it fails harmlessly (a dead
-// link someone would notice and report) rather than breaking anything else.
-const WORK_ORDER_DISPLAY_NUMBER_OFFSET = 100000;
-
 export type NeedsAttentionWorkOrder = {
   workOrderNumber: number;
   rentvineUrl: string;
-  propertyCode: string | null;
-  unitCode: string | null;
+  property: string | null;
+  unit: string | null;
   description: string;
   lastUpdated: string | null;
 };
@@ -153,13 +151,18 @@ export async function getNeedsAttentionWorkOrders(
   );
   const workOrders = rows
     .map((r): NeedsAttentionWorkOrder | null => {
+      // propertyName/unitName (what was originally requested) come back
+      // null on this report — propertyAddress/unitAddress2 are part of
+      // the fixed baseline every row carries regardless of requested
+      // columns, and are actually populated, so those are used instead.
+      const workOrderId = num(r.workOrderID);
       const workOrderNumber = num(r.workOrderNumber);
-      if (workOrderNumber == null) return null;
+      if (workOrderId == null || workOrderNumber == null) return null;
       return {
         workOrderNumber,
-        rentvineUrl: rentvineAppUrl(`/maintenance/work-orders/${workOrderNumber - WORK_ORDER_DISPLAY_NUMBER_OFFSET}`),
-        propertyCode: str(r.propertyName) ?? null,
-        unitCode: str(r.unitName) ?? null,
+        rentvineUrl: rentvineAppUrl(`/maintenance/work-orders/${workOrderId}`),
+        property: str(r.propertyAddress) ?? null,
+        unit: str(r.unitAddress2) ?? null,
         description: str(r.description) ?? "(no description)",
         lastUpdated: str(r.dateTimeModified) ?? null,
       };
