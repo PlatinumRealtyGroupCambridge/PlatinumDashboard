@@ -1,7 +1,41 @@
 import { prisma } from "./prisma";
 
+// Pure date math shared by getOrCreateNextInstance (which persists the
+// result) and the chat bot's meeting listing (which only needs to *know*
+// the true next date without creating anything) — kept in one place so
+// those two can never disagree about what "next" means for a series.
+// Picks the earliest already-existing instance that's still upcoming; if
+// none exists, advances from the latest known instance by the series'
+// interval, repeatedly if needed, until the result is actually upcoming.
+// A single increment would assume this is being computed shortly after the
+// last known instance passed — not true if the series went quiet for
+// longer than that (e.g. the app itself was down for a while).
+// Returns null for a ONE_OFF meeting that's already happened — unlike a
+// recurring series, a one-off doesn't regenerate itself, so it genuinely
+// has no "next" occurrence (rather than silently fabricating one 7 days
+// later, which the recurrence formula below would otherwise do for any
+// series type).
+export function computeNextInstanceDate(
+  series: { type: string; recurrenceIntervalDays: number | null },
+  instances: { startsAt: Date }[],
+  now: Date = new Date()
+): Date | null {
+  const sorted = [...instances].sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime());
+  const upcoming = sorted.find((i) => i.startsAt.getTime() >= now.getTime());
+  if (upcoming) return upcoming.startsAt;
+  if (series.type === "ONE_OFF") return null;
+
+  const last = sorted[sorted.length - 1];
+  const incrementDays = series.recurrenceIntervalDays ?? (series.type === "OWNERSHIP" ? 30 : 7);
+  let nextDate = last ? new Date(last.startsAt.getTime() + incrementDays * 86400000) : now;
+  while (nextDate.getTime() < now.getTime()) {
+    nextDate = new Date(nextDate.getTime() + incrementDays * 86400000);
+  }
+  return nextDate;
+}
+
 // Finds the next upcoming instance (startsAt >= now) for a series, or
-// creates one immediately after the series' latest instance if every
+// creates one at the date computeNextInstanceDate works out if every
 // existing instance is already in the past. Mirrors the prototype's
 // fallback of appending a new instance when "tabling" past the end of the
 // pre-generated list.
@@ -15,18 +49,10 @@ export async function getOrCreateNextInstance(seriesId: string) {
   const upcoming = series.instances.find((i) => i.startsAt.getTime() >= now.getTime());
   if (upcoming) return upcoming;
 
-  const last = series.instances[series.instances.length - 1];
-  const incrementDays = series.recurrenceIntervalDays ?? (series.type === "OWNERSHIP" ? 30 : 7);
-  let nextDate = last ? new Date(last.startsAt.getTime() + incrementDays * 86400000) : now;
-  // A single increment assumes this is being called shortly after the last
-  // known instance passed. If the series went quiet for longer than that
-  // (e.g. the app itself was down for a while), one increment can still
-  // land in the past — keep advancing until it's actually upcoming, rather
-  // than silently handing back a "next meeting" that's already over.
-  while (nextDate.getTime() < now.getTime()) {
-    nextDate = new Date(nextDate.getTime() + incrementDays * 86400000);
+  const nextDate = computeNextInstanceDate(series, series.instances, now);
+  if (!nextDate) {
+    throw new Error(`"${series.name}" already happened and, as a one-off meeting, doesn't recur.`);
   }
-
   return prisma.meetingInstance.create({
     data: { seriesId, startsAt: nextDate },
   });

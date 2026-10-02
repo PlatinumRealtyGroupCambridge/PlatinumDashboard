@@ -1,6 +1,6 @@
 import { prisma } from "./prisma";
 import { anthropic, CHAT_BOT_MODEL } from "./anthropic";
-import { getOrCreateNextInstance, findUpcomingInstance, deleteMeetingInstance } from "./meetings-server";
+import { getOrCreateNextInstance, findUpcomingInstance, deleteMeetingInstance, computeNextInstanceDate } from "./meetings-server";
 import { colorForIndex } from "./colors";
 import { nyTodayISO, zonedTimeToUtc } from "./timezone";
 import { recomputeGoalCompletion } from "./goal-progress";
@@ -128,12 +128,11 @@ export async function handleChatMessage(rawEvent: ChatEvent): Promise<string> {
       orderBy: { name: "asc" },
       include: {
         participants: { include: { user: true } },
-        // Just the soonest upcoming one, read-only — this doesn't create a
-        // new instance the way getOrCreateNextInstance does, it only shows
-        // what's already on the calendar, which is enough to tell "next
-        // meeting with X" apart across several candidates sharing that
-        // person (e.g. a recurring 1-on-1 plus an occasional one-off).
-        instances: { where: { startsAt: { gte: new Date() } }, orderBy: { startsAt: "asc" }, take: 1 },
+        // All instances, not just already-upcoming ones — computeNextInstanceDate
+        // needs the latest *past* one too, to work out the true next
+        // occurrence for a series that doesn't have one materialized yet
+        // (rather than this list wrongly looking like "nothing scheduled").
+        instances: { orderBy: { startsAt: "asc" } },
       },
     }),
     prisma.user.findMany({ orderBy: { name: "asc" } }),
@@ -157,15 +156,15 @@ export async function handleChatMessage(rawEvent: ChatEvent): Promise<string> {
 
   // Flattened for the prompt: who else is in each meeting (so a one-off
   // like "Roof repair walkthrough" is still recognizable as "a meeting with
-  // Matt" even though his name isn't in the title), and its next upcoming
-  // date if one's already on the calendar — see parseRequest's system
-  // prompt for how this resolves "my next meeting with X" when more than
-  // one of the sender's meetings involves that person.
+  // Matt" even though his name isn't in the title), and its true next date
+  // — via the same computeNextInstanceDate used when actually adding to a
+  // meeting, so what the model sees here can never disagree with what
+  // add_agenda_item would actually pick.
   const mySeriesForPrompt = mySeries.map((s) => ({
     id: s.id,
     name: s.name,
     otherParticipantNames: s.participants.filter((p) => p.userId !== user.id).map((p) => p.user.name.split(" ")[0]),
-    nextDate: s.instances[0]?.startsAt.toISOString().slice(0, 10) ?? null,
+    nextDate: computeNextInstanceDate(s, s.instances)?.toISOString().slice(0, 10) ?? null,
   }));
 
   const action = await parseRequest(rawText, user, mySeriesForPrompt, allUsers, activeGoals, pendingFollowUp, conversationHistory);
@@ -209,9 +208,17 @@ async function resolveSender(sender?: ChatSender) {
 // ---------- Claude-based intent parsing ----------
 
 type ParsedAction =
-  | { tool: "add_agenda_item"; seriesId: string; title: string; notes?: string }
-  | { tool: "add_task"; assigneeUserId: string; title: string; dueDate?: string; notes?: string; goalId?: string }
-  | { tool: "add_goal"; assigneeUserId: string; title: string; dueDate?: string; notes?: string }
+  | { tool: "add_agenda_item"; seriesId: string; title: string; notes?: string; leadIn?: string }
+  | {
+      tool: "add_task";
+      assigneeUserId: string;
+      title: string;
+      dueDate?: string;
+      notes?: string;
+      goalId?: string;
+      leadIn?: string;
+    }
+  | { tool: "add_goal"; assigneeUserId: string; title: string; dueDate?: string; notes?: string; leadIn?: string }
   | { tool: "set_due_date_on_pending_item"; dueDate?: string }
   | {
       tool: "create_meeting";
@@ -220,8 +227,9 @@ type ParsedAction =
       date: string;
       time: string;
       durationMins?: number;
+      leadIn?: string;
     }
-  | { tool: "delete_meeting"; seriesId: string }
+  | { tool: "delete_meeting"; seriesId: string; leadIn?: string }
   | { tool: "small_talk"; reply: string }
   | { tool: "ask_for_clarification"; question: string };
 
@@ -235,6 +243,11 @@ const NOTES_FIELD = {
   description:
     "Any additional detail, context, or specifics from the sender's message that don't fit in the short title. You may lightly summarize or rephrase for clarity — it doesn't need to be verbatim. Omit if the title alone already captures everything.",
 };
+const LEAD_IN_FIELD = {
+  type: "string" as const,
+  description:
+    "A short, natural opening phrase for your reply (3-8 words), e.g. 'Got it!' or 'On it!'. If the conversation above shows the sender just corrected a mistake you made (a wrong date, the wrong meeting, anything you got wrong), use this to briefly own it instead — e.g. 'Oops, you're right, sorry!' or 'My mistake — fixed it.' — rather than a cheerful opener that ignores what just happened. Omit to use a normal default opener.",
+};
 
 const BASE_TOOLS = [
   {
@@ -247,6 +260,7 @@ const BASE_TOOLS = [
         seriesId: { type: "string" as const, description: "id of the meeting (recurring or one-off) from the provided list" },
         title: TITLE_FIELD,
         notes: NOTES_FIELD,
+        leadIn: LEAD_IN_FIELD,
       },
       required: ["seriesId", "title"],
     },
@@ -267,6 +281,7 @@ const BASE_TOOLS = [
           description:
             "id of the goal from the provided goals list, ONLY if the sender explicitly said this task belongs under/for/as part of that specific goal. Omit entirely for a standalone task not tied to any goal — don't attach one just because a goal with a similar topic exists.",
         },
+        leadIn: LEAD_IN_FIELD,
       },
       required: ["assigneeUserId", "title"],
     },
@@ -281,6 +296,7 @@ const BASE_TOOLS = [
         title: TITLE_FIELD,
         notes: NOTES_FIELD,
         dueDate: { type: "string" as const, description: "ISO date YYYY-MM-DD target date if mentioned; omit otherwise" },
+        leadIn: LEAD_IN_FIELD,
       },
       required: ["assigneeUserId", "title"],
     },
@@ -309,6 +325,7 @@ const BASE_TOOLS = [
           type: "number" as const,
           description: "meeting length in minutes if mentioned (e.g. 'a quick 15 minute sync'); omit to default to 30",
         },
+        leadIn: LEAD_IN_FIELD,
       },
       required: ["title", "participantUserIds", "date", "time"],
     },
@@ -321,6 +338,7 @@ const BASE_TOOLS = [
       type: "object" as const,
       properties: {
         seriesId: { type: "string" as const, description: "id of the meeting (recurring or one-off) from the provided list" },
+        leadIn: LEAD_IN_FIELD,
       },
       required: ["seriesId"],
     },
@@ -391,7 +409,9 @@ ${pendingNote}${historyNote}
 Meetings ${sender.name} can add agenda items to or cancel (use these exact ids, and ONLY these — the sender cannot add to or cancel meetings they don't attend). This list mixes recurring meeting series and one-off meetings together — there is no distinction between the two for add_agenda_item or delete_meeting, both work exactly the same way on either kind. "with" is everyone else in that meeting (not counting ${sender.name}); "next" is its next scheduled date if one exists yet:
 ${mySeries.map((s) => `- ${s.id}: ${s.name} (with: ${s.otherParticipantNames.join(", ") || "no one else"}; next: ${s.nextDate ?? "none scheduled yet"})`).join("\n") || "(none)"}
 
-If the sender refers to "my next meeting with <person>" and more than one meeting above has that person in its "with" list (e.g. a recurring 1-on-1 plus an occasional one-off meeting outside it), don't ask which one they mean — just use whichever has the earliest "next" date. Only ask for clarification if none of them have a "with" match, or if two tie on the exact same date.
+If the sender refers to "my next meeting with <person>" and more than one meeting above has that person in its "with" list (e.g. a recurring 1-on-1 plus an occasional one-off meeting outside it), don't ask which one they mean — just use whichever has the earliest "next" date; that "next" date is already the true next occurrence for each meeting, so the earliest one really is the next meeting with that person, even if it's a one-off happening before their usual recurring time. Only ask for clarification if none of them have a "with" match, or if two tie on the exact same date, or if something about the request genuinely leaves you unsure which meeting is meant — asking a quick clarifying question beats guessing wrong.
+
+${historyNote ? `Check the conversation above before replying: if the sender is now telling you that you got something wrong last turn (a wrong date, the wrong meeting, anything else), use the leadIn field on your tool call to briefly own the mistake in your own words, the way a thoughtful human assistant would (e.g. "Oops, you're right, sorry about that!" or "My mistake — fixed it.") rather than a generic cheerful opener that ignores what just happened. If nothing went wrong, just omit leadIn and use a normal opener.\n` : ""}
 
 Team members tasks/goals/new meetings can involve (use these exact ids):
 ${allUsers.map((u) => `- ${u.id}: ${u.name}`).join("\n")}
@@ -431,6 +451,7 @@ If the message is just a greeting, thanks, acknowledgment ("ok", "sounds good", 
         seriesId: String(input.seriesId),
         title: String(input.title),
         notes: typeof input.notes === "string" ? input.notes : undefined,
+        leadIn: typeof input.leadIn === "string" ? input.leadIn : undefined,
       };
     case "add_task":
       return {
@@ -440,6 +461,7 @@ If the message is just a greeting, thanks, acknowledgment ("ok", "sounds good", 
         dueDate: typeof input.dueDate === "string" ? input.dueDate : undefined,
         notes: typeof input.notes === "string" ? input.notes : undefined,
         goalId: typeof input.goalId === "string" && input.goalId ? input.goalId : undefined,
+        leadIn: typeof input.leadIn === "string" ? input.leadIn : undefined,
       };
     case "add_goal":
       return {
@@ -448,6 +470,7 @@ If the message is just a greeting, thanks, acknowledgment ("ok", "sounds good", 
         title: String(input.title),
         dueDate: typeof input.dueDate === "string" ? input.dueDate : undefined,
         notes: typeof input.notes === "string" ? input.notes : undefined,
+        leadIn: typeof input.leadIn === "string" ? input.leadIn : undefined,
       };
     case "set_due_date_on_pending_item":
       return {
@@ -464,11 +487,13 @@ If the message is just a greeting, thanks, acknowledgment ("ok", "sounds good", 
         date: String(input.date),
         time: String(input.time),
         durationMins: typeof input.durationMins === "number" ? input.durationMins : undefined,
+        leadIn: typeof input.leadIn === "string" ? input.leadIn : undefined,
       };
     case "delete_meeting":
       return {
         tool: "delete_meeting",
         seriesId: String(input.seriesId),
+        leadIn: typeof input.leadIn === "string" ? input.leadIn : undefined,
       };
     case "small_talk":
       return {
@@ -543,7 +568,15 @@ async function executeAction(
     if (!series || !series.participants.some((p) => p.userId === sender.id)) {
       return "Hmm, I couldn't add that — that doesn't look like one of your meetings.";
     }
-    const instance = await getOrCreateNextInstance(series.id);
+    let instance;
+    try {
+      instance = await getOrCreateNextInstance(series.id);
+    } catch {
+      // Only reachable if the model picked a one-off meeting that's already
+      // happened despite the "next: none scheduled yet" hint in its prompt
+      // — a genuine mismatch, not something to guess around.
+      return `Hmm, "${series.name}" has already happened and doesn't have another date on the calendar — could you double check which meeting you meant?`;
+    }
     await prisma.agendaItem.create({
       data: {
         instanceId: instance.id,
@@ -557,7 +590,7 @@ async function executeAction(
     // meeting instant back to a person) because this runs server-side on
     // Vercel, whose Node runtime defaults to UTC — without it, a meeting
     // in the evening Eastern could be read back as the following day.
-    return `${pick(ACK_OPENERS)} Added "${action.title}" to the agenda for ${series.name} on ${instance.startsAt.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "America/New_York" })}.${noteAside}`;
+    return `${action.leadIn ?? pick(ACK_OPENERS)} Added "${action.title}" to the agenda for ${series.name} on ${instance.startsAt.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "America/New_York" })}.${noteAside}`;
   }
 
   if (action.tool === "create_meeting") {
@@ -605,7 +638,7 @@ async function executeAction(
       minute: "2-digit",
       timeZone: "America/New_York",
     });
-    return `${pick(ACK_OPENERS)} Scheduled "${action.title}"${withWho} for ${whenStr} at ${timeStr} ET. Everyone included will see it on the Meeting Management calendar.`;
+    return `${action.leadIn ?? pick(ACK_OPENERS)} Scheduled "${action.title}"${withWho} for ${whenStr} at ${timeStr} ET. Everyone included will see it on the Meeting Management calendar.`;
   }
 
   if (action.tool === "delete_meeting") {
@@ -629,7 +662,7 @@ async function executeAction(
     });
     await deleteMeetingInstance(instance.id);
     const followUp = series.type === "ONE_OFF" ? "" : " The recurring meeting will continue as normal after that.";
-    return `Done — I removed "${series.name}" on ${whenStr} from the calendar.${followUp}`;
+    return `${action.leadIn ?? "Done —"} I removed "${series.name}" on ${whenStr} from the calendar.${followUp}`;
   }
 
   if (action.tool === "add_task") {
@@ -666,12 +699,12 @@ async function executeAction(
     const noteAside = action.notes ? " I added the extra details to its notes." : "";
     const goalAside = goal ? ` under the goal "${goal.title}"` : "";
     if (action.dueDate) {
-      return `${pick(ACK_OPENERS)} Added a task for ${firstName}${goalAside}: "${action.title}" — due ${formatDueDate(action.dueDate)}.${noteAside}`;
+      return `${action.leadIn ?? pick(ACK_OPENERS)} Added a task for ${firstName}${goalAside}: "${action.title}" — due ${formatDueDate(action.dueDate)}.${noteAside}`;
     }
     await prisma.chatFollowUp.create({
       data: { userId: sender.id, itemType: "task", itemId: task.id, itemTitle: action.title },
     });
-    return `${pick(ACK_OPENERS)} I added a task for ${firstName}${goalAside}: "${action.title}".${noteAside} Did you want to give ${firstName} a deadline for this? Just tell me the date, or say "no rush" if not.`;
+    return `${action.leadIn ?? pick(ACK_OPENERS)} I added a task for ${firstName}${goalAside}: "${action.title}".${noteAside} Did you want to give ${firstName} a deadline for this? Just tell me the date, or say "no rush" if not.`;
   }
 
   if (action.tool === "add_goal") {
@@ -690,12 +723,12 @@ async function executeAction(
     });
     const noteAside = action.notes ? " I added the extra details to its notes." : "";
     if (action.dueDate) {
-      return `${pick(ACK_OPENERS)} Added a goal for ${firstName}: "${action.title}" — target ${formatDueDate(action.dueDate)}.${noteAside}`;
+      return `${action.leadIn ?? pick(ACK_OPENERS)} Added a goal for ${firstName}: "${action.title}" — target ${formatDueDate(action.dueDate)}.${noteAside}`;
     }
     await prisma.chatFollowUp.create({
       data: { userId: sender.id, itemType: "goal", itemId: goal.id, itemTitle: action.title },
     });
-    return `${pick(ACK_OPENERS)} I added a goal for ${firstName}: "${action.title}".${noteAside} Did you want to set a target date for this? Just tell me the date, or say "no rush" if not.`;
+    return `${action.leadIn ?? pick(ACK_OPENERS)} I added a goal for ${firstName}: "${action.title}".${noteAside} Did you want to set a target date for this? Just tell me the date, or say "no rush" if not.`;
   }
 
   return "Sorry, something went wrong handling that.";
