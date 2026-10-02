@@ -10,11 +10,16 @@ type NeedsAttentionWorkOrder = {
   unit: string | null;
   description: string;
   status: string | null;
+  requestedBy: string | null;
+  requestedByType: "Resident" | "Internal";
+  assignee: string | null;
   lastUpdated: string | null;
   daysSinceUpdate: number | null;
 };
 
-type SortKey = "workOrderNumber" | "property" | "status" | "lastUpdated" | "daysSinceUpdate";
+const UNASSIGNED = "Unassigned";
+
+type SortKey = "workOrderNumber" | "property" | "status" | "requestedByType" | "assignee" | "lastUpdated" | "daysSinceUpdate";
 type SortDir = "asc" | "desc";
 
 // Which direction makes sense the first time a column is clicked — e.g.
@@ -23,6 +28,8 @@ const DEFAULT_DIRECTION: Record<SortKey, SortDir> = {
   workOrderNumber: "asc",
   property: "asc",
   status: "asc",
+  requestedByType: "asc",
+  assignee: "asc",
   lastUpdated: "asc",
   daysSinceUpdate: "desc",
 };
@@ -31,6 +38,8 @@ const COLUMNS: { key: SortKey; label: string }[] = [
   { key: "workOrderNumber", label: "WO #" },
   { key: "property", label: "Property / Unit" },
   { key: "status", label: "Status" },
+  { key: "requestedByType", label: "Submitted By" },
+  { key: "assignee", label: "Assignee" },
   { key: "lastUpdated", label: "Last updated" },
   { key: "daysSinceUpdate", label: "Days since update" },
 ];
@@ -43,6 +52,10 @@ function compareValues(a: NeedsAttentionWorkOrder, b: NeedsAttentionWorkOrder, k
       return (a.property ?? "").localeCompare(b.property ?? "");
     case "status":
       return (a.status ?? "").localeCompare(b.status ?? "");
+    case "requestedByType":
+      return a.requestedByType.localeCompare(b.requestedByType);
+    case "assignee":
+      return (a.assignee ?? UNASSIGNED).localeCompare(b.assignee ?? UNASSIGNED);
     case "lastUpdated":
       return (a.lastUpdated ?? "").localeCompare(b.lastUpdated ?? "");
     case "daysSinceUpdate":
@@ -57,6 +70,7 @@ export default function NeedsAttentionList({ label, isAdmin }: { label: string; 
   const [error, setError] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("daysSinceUpdate");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [assigneeFilter, setAssigneeFilter] = useState<string>("all");
 
   useEffect(() => {
     fetch("/api/maintenance/needs-attention")
@@ -79,11 +93,22 @@ export default function NeedsAttentionList({ label, isAdmin }: { label: string; 
     }
   }
 
-  const sortedList = useMemo(() => {
+  const assigneeOptions = useMemo(() => {
+    if (!list) return [];
+    return Array.from(new Set(list.map((w) => w.assignee ?? UNASSIGNED))).sort((a, b) => a.localeCompare(b));
+  }, [list]);
+
+  const filteredList = useMemo(() => {
     if (!list) return null;
-    const sorted = [...list].sort((a, b) => compareValues(a, b, sortKey));
+    if (assigneeFilter === "all") return list;
+    return list.filter((w) => (w.assignee ?? UNASSIGNED) === assigneeFilter);
+  }, [list, assigneeFilter]);
+
+  const sortedList = useMemo(() => {
+    if (!filteredList) return null;
+    const sorted = [...filteredList].sort((a, b) => compareValues(a, b, sortKey));
     return sortDir === "asc" ? sorted : sorted.reverse();
-  }, [list, sortKey, sortDir]);
+  }, [filteredList, sortKey, sortDir]);
 
   return (
     <div>
@@ -101,8 +126,28 @@ export default function NeedsAttentionList({ label, isAdmin }: { label: string; 
       {loading && <p style={{ color: "var(--text-muted)", fontSize: 13.5 }}>Loading…</p>}
       {error && <div className="login-error">{error}</div>}
 
-      {!loading && !error && sortedList && (
-        sortedList.length === 0 ? (
+      {!loading && !error && list && list.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <label style={{ fontSize: 12.5, color: "var(--text-muted)", fontWeight: 600 }}>
+            Filter by assignee{" "}
+            <select
+              value={assigneeFilter}
+              onChange={(e) => setAssigneeFilter(e.target.value)}
+              style={{ marginLeft: 6, fontSize: 13 }}
+            >
+              <option value="all">All assignees</option>
+              {assigneeOptions.map((a) => (
+                <option key={a} value={a}>
+                  {a}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      )}
+
+      {!loading && !error && list && (
+        list.length === 0 ? (
           <>
             <div className="card empty-state">Nothing needs attention right now.</div>
             {isAdmin && rawSample && (
@@ -123,6 +168,8 @@ export default function NeedsAttentionList({ label, isAdmin }: { label: string; 
               </div>
             )}
           </>
+        ) : sortedList && sortedList.length === 0 ? (
+          <div className="card empty-state">No work orders match that assignee.</div>
         ) : (
           <div className="card" style={{ padding: 0, overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
@@ -146,7 +193,7 @@ export default function NeedsAttentionList({ label, isAdmin }: { label: string; 
                 </tr>
               </thead>
               <tbody>
-                {sortedList.map((wo) => (
+                {sortedList?.map((wo) => (
                   <tr key={wo.workOrderNumber} style={{ borderTop: "1px solid var(--border)" }}>
                     <td style={{ padding: "10px 16px", whiteSpace: "nowrap" }}>
                       <a href={wo.rentvineUrl} target="_blank" rel="noopener noreferrer">
@@ -157,6 +204,10 @@ export default function NeedsAttentionList({ label, isAdmin }: { label: string; 
                       {[wo.property, wo.unit].filter(Boolean).join(", ") || "—"}
                     </td>
                     <td style={{ padding: "10px 16px", whiteSpace: "nowrap" }}>{wo.status ?? "—"}</td>
+                    <td style={{ padding: "10px 16px", whiteSpace: "nowrap" }}>
+                      {wo.requestedBy ? `${wo.requestedBy} (${wo.requestedByType})` : wo.requestedByType}
+                    </td>
+                    <td style={{ padding: "10px 16px", whiteSpace: "nowrap" }}>{wo.assignee ?? UNASSIGNED}</td>
                     <td style={{ padding: "10px 16px", whiteSpace: "nowrap" }}>
                       {wo.lastUpdated ? wo.lastUpdated.slice(0, 10) : "—"}
                     </td>

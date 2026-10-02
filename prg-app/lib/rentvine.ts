@@ -174,6 +174,30 @@ function isExcludedRow(r: ReportRow, excluded: { propertyIds: Set<number>; unitI
   return (propertyId != null && excluded.propertyIds.has(propertyId)) || (unitId != null && excluded.unitIds.has(unitId));
 }
 
+// The baseline "tenants" field is a JSON-encoded array of tenant names on
+// the unit's lease (e.g. '["Jakub Dovcik", "Ian M. Curtis"]'), not an
+// actual array — parse it defensively since its shape isn't documented
+// any more than the rest of this response is.
+function parseTenantNames(value: unknown): string[] {
+  if (typeof value !== "string" || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((t): t is string => typeof t === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+// There's no explicit "internal vs. resident" field on a work order — the
+// best available signal is whether the person recorded as having
+// requested it is one of the unit's actual tenants. No requester name at
+// all (e.g. a recurring/system-generated work order) counts as Internal.
+function requesterType(requestedBy: string | undefined, tenants: string[]): "Resident" | "Internal" {
+  if (!requestedBy) return "Internal";
+  const normalized = requestedBy.trim().toLowerCase();
+  return tenants.some((t) => t.trim().toLowerCase() === normalized) ? "Resident" : "Internal";
+}
+
 export type NeedsAttentionWorkOrder = {
   workOrderNumber: number;
   rentvineUrl: string;
@@ -181,6 +205,9 @@ export type NeedsAttentionWorkOrder = {
   unit: string | null;
   description: string;
   status: string | null;
+  requestedBy: string | null;
+  requestedByType: "Resident" | "Internal";
+  assignee: string | null;
   lastUpdated: string | null;
   daysSinceUpdate: number | null;
 };
@@ -197,7 +224,15 @@ export async function getNeedsAttentionWorkOrders(
 ): Promise<{ workOrders: NeedsAttentionWorkOrder[]; rawSample?: string }> {
   const [{ rows, rawSample }, excluded] = await Promise.all([
     runWorkOrderReport(
-      ["workOrderNumber", "propertyID", "unitID", "description", "dateTimeModified"],
+      [
+        "workOrderNumber",
+        "propertyID",
+        "unitID",
+        "description",
+        "dateTimeModified",
+        "requestedByName",
+        "assignedToUserFullName",
+      ],
       [
         { name: "primaryWorkOrderStatusID", comparator: "in", values: OPEN_PRIMARY_STATUSES },
         { name: "dateTimeModified", comparator: "onOrBeforeDateRange", endDate: addDays(todayISO, -3) },
@@ -219,6 +254,7 @@ export async function getNeedsAttentionWorkOrders(
       if (workOrderId == null || workOrderNumber == null) return null;
       if (isExcludedRow(r, excluded)) return null;
       const lastUpdated = str(r.dateTimeModified) ?? null;
+      const requestedBy = str(r.requestedByName) ?? null;
       return {
         workOrderNumber,
         rentvineUrl: rentvineAppUrl(`/maintenance/work-orders/${workOrderId}`),
@@ -226,6 +262,9 @@ export async function getNeedsAttentionWorkOrders(
         unit: str(r.unitAddress2) ?? null,
         description: str(r.description) ?? "(no description)",
         status: str(r.workOrderStatusName) ?? null,
+        requestedBy,
+        requestedByType: requesterType(requestedBy ?? undefined, parseTenantNames(r.tenants)),
+        assignee: str(r.assignedToUserFullName) ?? null,
         lastUpdated,
         daysSinceUpdate: lastUpdated ? daysBetween(lastUpdated.slice(0, 10), todayISO) : null,
       };
@@ -283,14 +322,20 @@ export async function getOpenWorkOrderStats(todayISO: string): Promise<{
 export async function getAvgDaysToClose12Month(asOfISO: string): Promise<number | null> {
   const windowEnd = lastDayOfMonth(asOfISO);
   const windowStart = startOfMonthMinus(windowEnd, 11);
-  const { rows } = await runWorkOrderReport(
-    ["daysOpen"],
-    [
-      { name: "primaryWorkOrderStatusID", comparator: "equals", value: CLOSED_PRIMARY_STATUS },
-      { name: "dateClosed", comparator: "betweenDate", startDate: windowStart, endDate: windowEnd },
-    ]
-  );
-  const days = rows.map((r) => num(r.daysOpen)).filter((n): n is number => n != null);
+  const [{ rows }, excluded] = await Promise.all([
+    runWorkOrderReport(
+      ["daysOpen", "propertyID", "unitID"],
+      [
+        { name: "primaryWorkOrderStatusID", comparator: "equals", value: CLOSED_PRIMARY_STATUS },
+        { name: "dateClosed", comparator: "betweenDate", startDate: windowStart, endDate: windowEnd },
+      ]
+    ),
+    getExcludedPropertyAndUnitIds(),
+  ]);
+  const days = rows
+    .filter((r) => !isExcludedRow(r, excluded))
+    .map((r) => num(r.daysOpen))
+    .filter((n): n is number => n != null);
   if (days.length === 0) return null;
   return Math.round((days.reduce((a, b) => a + b, 0) / days.length) * 100) / 100;
 }
