@@ -25,5 +25,5 @@ export default async function MaintenanceNeedsAttentionPage() {
     );
   }
 
-  return <NeedsAttentionList label={section.label} />;
+  return <NeedsAttentionList label={section.label} isAdmin={viewer.isAdmin} />;
 }

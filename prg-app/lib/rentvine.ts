@@ -48,7 +48,15 @@ function parseReportRows(raw: unknown, displayColumns: string[]): ReportRow[] {
     .filter((r): r is ReportRow => r != null);
 }
 
-async function runWorkOrderReport(displayColumns: string[], filters: ReportFilter[]): Promise<ReportRow[]> {
+// Returns both the parsed rows and a sample of the untouched raw response
+// — the response envelope isn't independently documented, so when parsing
+// yields nothing, callers can surface rawSample directly (e.g. to an admin
+// viewing the page) instead of the mismatch only being visible in Vercel's
+// server logs, which nobody was able to check last time this broke.
+async function runWorkOrderReport(
+  displayColumns: string[],
+  filters: ReportFilter[]
+): Promise<{ rows: ReportRow[]; rawSample: string }> {
   const json = JSON.stringify({ displayColumns, filters });
   const raw = await fetchRentvineApi("/reports/work-order", {
     exportTypeID: 1,
@@ -57,14 +65,11 @@ async function runWorkOrderReport(displayColumns: string[], filters: ReportFilte
     json,
   });
   const rows = parseReportRows(raw, displayColumns);
-  // Diagnostic safety net: if rows parsed out to nothing, it's impossible
-  // to tell from here whether that's a genuinely empty result or a shape
-  // this parser still doesn't recognize — log a sample so Vercel's
-  // function logs can settle it without another guess-and-redeploy cycle.
+  const rawSample = JSON.stringify(raw, null, 2).slice(0, 4000);
   if (rows.length === 0) {
-    console.error("Rentvine work-order report returned 0 parsed rows — raw response sample:", JSON.stringify(raw).slice(0, 500));
+    console.error("Rentvine work-order report returned 0 parsed rows — raw response sample:", rawSample);
   }
-  return rows;
+  return { rows, rawSample };
 }
 
 // Rentvine's "Primary Work Order Status" groups its ~12 custom pipeline
@@ -134,8 +139,12 @@ export type NeedsAttentionWorkOrder = {
 // The actual work orders behind the "needs attention" count — same filter
 // as getOpenWorkOrderStats' staleRows, with enough detail to show a
 // useful list and a direct link to each one in Rentvine. Stalest first.
-export async function getNeedsAttentionWorkOrders(todayISO: string): Promise<NeedsAttentionWorkOrder[]> {
-  const rows = await runWorkOrderReport(
+// rawSample is only populated when the list comes out empty, as a
+// diagnostic for an admin to inspect directly on the page.
+export async function getNeedsAttentionWorkOrders(
+  todayISO: string
+): Promise<{ workOrders: NeedsAttentionWorkOrder[]; rawSample?: string }> {
+  const { rows, rawSample } = await runWorkOrderReport(
     ["workOrderNumber", "propertyName", "unitName", "description", "dateTimeModified"],
     [
       { name: "primaryWorkOrderStatusID", comparator: "in", values: OPEN_PRIMARY_STATUSES },
@@ -157,7 +166,7 @@ export async function getNeedsAttentionWorkOrders(todayISO: string): Promise<Nee
     })
     .filter((r): r is NeedsAttentionWorkOrder => r != null);
   workOrders.sort((a, b) => (a.lastUpdated ?? "").localeCompare(b.lastUpdated ?? ""));
-  return workOrders;
+  return workOrders.length === 0 ? { workOrders, rawSample } : { workOrders };
 }
 
 // The four "tied to today" metrics — not affected by the dashboard's date
@@ -179,7 +188,7 @@ export async function getOpenWorkOrderStats(todayISO: string): Promise<{
     comparator: "equals",
     value: statusId,
   });
-  const [pendingRows, openRows, onHoldRows, staleRows] = await Promise.all([
+  const [pending, open, onHold, stale] = await Promise.all([
     runWorkOrderReport(["workOrderNumber"], [statusFilter("1")]),
     runWorkOrderReport(["workOrderNumber"], [statusFilter("2")]),
     runWorkOrderReport(["workOrderNumber"], [statusFilter("4")]),
@@ -189,10 +198,10 @@ export async function getOpenWorkOrderStats(todayISO: string): Promise<{
     ]),
   ]);
   return {
-    pendingWorkOrders: pendingRows.length,
-    openWorkOrders: openRows.length,
-    onHoldWorkOrders: onHoldRows.length,
-    needsAttention: staleRows.length,
+    pendingWorkOrders: pending.rows.length,
+    openWorkOrders: open.rows.length,
+    onHoldWorkOrders: onHold.rows.length,
+    needsAttention: stale.rows.length,
   };
 }
 
@@ -205,7 +214,7 @@ export async function getOpenWorkOrderStats(todayISO: string): Promise<{
 export async function getAvgDaysToClose12Month(asOfISO: string): Promise<number | null> {
   const windowEnd = lastDayOfMonth(asOfISO);
   const windowStart = startOfMonthMinus(windowEnd, 11);
-  const rows = await runWorkOrderReport(
+  const { rows } = await runWorkOrderReport(
     ["daysOpen"],
     [
       { name: "primaryWorkOrderStatusID", comparator: "equals", value: CLOSED_PRIMARY_STATUS },

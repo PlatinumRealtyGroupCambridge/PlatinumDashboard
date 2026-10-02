@@ -12,8 +12,9 @@ type NeedsAttentionWorkOrder = {
   lastUpdated: string | null;
 };
 
-export default function NeedsAttentionList({ label }: { label: string }) {
+export default function NeedsAttentionList({ label, isAdmin }: { label: string; isAdmin: boolean }) {
   const [list, setList] = useState<NeedsAttentionWorkOrder[] | null>(null);
+  const [rawSample, setRawSample] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -23,6 +24,7 @@ export default function NeedsAttentionList({ label }: { label: string }) {
         const json = await res.json().catch(() => ({}));
         if (!res.ok || json.error) throw new Error(json?.error || "Failed to load the list.");
         setList(json.workOrders);
+        setRawSample(json.rawSample ?? null);
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load the list."))
       .finally(() => setLoading(false));
@@ -46,7 +48,26 @@ export default function NeedsAttentionList({ label }: { label: string }) {
 
       {!loading && !error && list && (
         list.length === 0 ? (
-          <div className="card empty-state">Nothing needs attention right now.</div>
+          <>
+            <div className="card empty-state">Nothing needs attention right now.</div>
+            {isAdmin && rawSample && (
+              <div className="card" style={{ padding: 16, marginTop: 16 }}>
+                <p style={{ fontWeight: 700, fontSize: 13, margin: "0 0 6px" }}>
+                  Admin diagnostic: this list came back empty but Rentvine reported matching work orders.
+                </p>
+                <p style={{ color: "var(--text-muted)", fontSize: 12.5, margin: "0 0 10px" }}>
+                  Something about Rentvine&apos;s response shape isn&apos;t being read correctly. Copy the text
+                  below and send it along to fix it.
+                </p>
+                <textarea
+                  readOnly
+                  value={rawSample}
+                  style={{ width: "100%", height: 220, fontFamily: "monospace", fontSize: 11.5 }}
+                  onFocus={(e) => e.currentTarget.select()}
+                />
+              </div>
+            )}
+          </>
         ) : (
           <div className="card" style={{ padding: 0, overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>

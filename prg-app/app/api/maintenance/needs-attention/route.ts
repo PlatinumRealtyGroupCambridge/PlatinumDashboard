@@ -15,8 +15,11 @@ export async function GET() {
   }
 
   try {
-    const workOrders = await getNeedsAttentionWorkOrders(nyTodayISO());
-    return NextResponse.json({ workOrders });
+    const { workOrders, rawSample } = await getNeedsAttentionWorkOrders(nyTodayISO());
+    // rawSample is only ever set when workOrders comes back empty — only
+    // worth showing to an admin, so a mismatch is debuggable directly on
+    // the page instead of needing someone to go dig through Vercel's logs.
+    return NextResponse.json({ workOrders, rawSample: viewer.isAdmin ? rawSample : undefined });
   } catch (err) {
     const error =
       err instanceof RentvineNotConfiguredError
