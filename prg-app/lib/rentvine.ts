@@ -124,6 +124,11 @@ function num(v: unknown): number | undefined {
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() !== "" ? v : undefined;
 }
+function daysBetween(fromISO: string, toISO: string): number {
+  const a = new Date(`${fromISO}T00:00:00Z`).getTime();
+  const b = new Date(`${toISO}T00:00:00Z`).getTime();
+  return Math.round((b - a) / 86400000);
+}
 
 export type NeedsAttentionWorkOrder = {
   workOrderNumber: number;
@@ -131,14 +136,18 @@ export type NeedsAttentionWorkOrder = {
   property: string | null;
   unit: string | null;
   description: string;
+  status: string | null;
   lastUpdated: string | null;
+  daysSinceUpdate: number | null;
 };
 
 // The actual work orders behind the "needs attention" count — same filter
 // as getOpenWorkOrderStats' staleRows, with enough detail to show a
-// useful list and a direct link to each one in Rentvine. Stalest first.
-// rawSample is only populated when the list comes out empty, as a
-// diagnostic for an admin to inspect directly on the page.
+// useful list and a direct link to each one in Rentvine. Sorting is left
+// to the frontend (it fetches the whole list anyway); stalest-first here
+// is just a sane default order. rawSample is only populated when the
+// list comes out empty, as a diagnostic for an admin to inspect directly
+// on the page.
 export async function getNeedsAttentionWorkOrders(
   todayISO: string
 ): Promise<{ workOrders: NeedsAttentionWorkOrder[]; rawSample?: string }> {
@@ -155,20 +164,26 @@ export async function getNeedsAttentionWorkOrders(
       // null on this report — propertyAddress/unitAddress2 are part of
       // the fixed baseline every row carries regardless of requested
       // columns, and are actually populated, so those are used instead.
+      // workOrderStatusName is the specific pipeline status (e.g.
+      // "Requested", "Scheduled", "Vendor Completed") rather than just
+      // the Pending/Open/On Hold bucket used to filter this list.
       const workOrderId = num(r.workOrderID);
       const workOrderNumber = num(r.workOrderNumber);
       if (workOrderId == null || workOrderNumber == null) return null;
+      const lastUpdated = str(r.dateTimeModified) ?? null;
       return {
         workOrderNumber,
         rentvineUrl: rentvineAppUrl(`/maintenance/work-orders/${workOrderId}`),
         property: str(r.propertyAddress) ?? null,
         unit: str(r.unitAddress2) ?? null,
         description: str(r.description) ?? "(no description)",
-        lastUpdated: str(r.dateTimeModified) ?? null,
+        status: str(r.workOrderStatusName) ?? null,
+        lastUpdated,
+        daysSinceUpdate: lastUpdated ? daysBetween(lastUpdated.slice(0, 10), todayISO) : null,
       };
     })
     .filter((r): r is NeedsAttentionWorkOrder => r != null);
-  workOrders.sort((a, b) => (a.lastUpdated ?? "").localeCompare(b.lastUpdated ?? ""));
+  workOrders.sort((a, b) => (b.daysSinceUpdate ?? 0) - (a.daysSinceUpdate ?? 0));
   return workOrders.length === 0 ? { workOrders, rawSample } : { workOrders };
 }
 
