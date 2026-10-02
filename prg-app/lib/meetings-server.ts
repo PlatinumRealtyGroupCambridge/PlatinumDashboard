@@ -16,7 +16,7 @@ export async function getOrCreateNextInstance(seriesId: string) {
   if (upcoming) return upcoming;
 
   const last = series.instances[series.instances.length - 1];
-  const incrementDays = series.type === "OWNERSHIP" ? 30 : 7;
+  const incrementDays = series.recurrenceIntervalDays ?? (series.type === "OWNERSHIP" ? 30 : 7);
   const nextDate = last
     ? new Date(last.startsAt.getTime() + incrementDays * 86400000)
     : now;
@@ -39,7 +39,7 @@ export async function getOrCreateInstanceAfter(seriesId: string, afterDate: Date
   if (next) return next;
 
   const last = series.instances[series.instances.length - 1];
-  const incrementDays = series.type === "OWNERSHIP" ? 30 : 7;
+  const incrementDays = series.recurrenceIntervalDays ?? (series.type === "OWNERSHIP" ? 30 : 7);
   const base = last && last.startsAt.getTime() > afterDate.getTime() ? last.startsAt : afterDate;
   const nextDate = new Date(base.getTime() + incrementDays * 86400000);
 
@@ -108,4 +108,42 @@ export async function deleteMeetingInstance(instanceId: string) {
   }
 
   return { seriesId: instance.seriesId, seriesName: instance.series.name, seriesType: instance.series.type, seriesDeleted };
+}
+
+// "Delete all future meetings" on a recurring series — the counterpart to
+// deleteMeetingInstance's "just this one" behavior. Removes every
+// not-yet-happened instance (same FK-safety nulling for any Task pointing
+// at one of their agenda items) and marks the series inactive so
+// getOrCreateNextInstance never generates another occurrence for it. Past
+// instances, and the agenda items/attendance history on them, are left
+// alone — this stops the series going forward, it doesn't erase it.
+// Every series-listing query (lib/get-meeting-data.ts, lib/chat-bot.ts,
+// app/(app)/page.tsx) filters on active: true, so an ended series quietly
+// stops appearing anywhere rather than needing special-case handling at
+// each call site.
+export async function deleteFutureInstancesAndEndSeries(seriesId: string) {
+  const now = new Date();
+  const series = await prisma.meetingSeries.findUnique({
+    where: { id: seriesId },
+    include: {
+      instances: {
+        where: { startsAt: { gte: now } },
+        include: { agendaItems: { select: { id: true } } },
+      },
+    },
+  });
+  if (!series) return null;
+
+  const instanceIds = series.instances.map((i) => i.id);
+  const agendaItemIds = series.instances.flatMap((i) => i.agendaItems.map((a) => a.id));
+
+  await prisma.$transaction([
+    ...(agendaItemIds.length
+      ? [prisma.task.updateMany({ where: { agendaItemId: { in: agendaItemIds } }, data: { agendaItemId: null } })]
+      : []),
+    ...(instanceIds.length ? [prisma.meetingInstance.deleteMany({ where: { id: { in: instanceIds } } })] : []),
+    prisma.meetingSeries.update({ where: { id: seriesId }, data: { active: false } }),
+  ]);
+
+  return { seriesId, seriesName: series.name, seriesType: series.type };
 }

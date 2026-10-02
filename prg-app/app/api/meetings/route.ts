@@ -7,11 +7,18 @@ import { zonedTimeToUtc } from "@/lib/timezone";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
-// Creates a one-off meeting: a MeetingSeries with type ONE_OFF and exactly
-// one MeetingInstance, reusing the same models (and therefore the same
+// The only repeat cadences the "+ New meeting" form offers — validated
+// against this exact set rather than accepting any number, since it's
+// stored and later read back by getOrCreateNextInstance.
+const VALID_RECURRENCE_INTERVALS = [7, 14, 30];
+
+// Creates a meeting from the "+ New meeting" button: a ONE_OFF (single
+// MeetingInstance) by default, or a RECURRING series if a "Repeats"
+// cadence was chosen — both reuse the same models (and therefore the same
 // calendar/list rendering, agenda items, and Google Chat bot agenda-item
-// support) as every recurring series. See lib/chat-bot.ts's create_meeting
-// tool for the chat-driven equivalent of this same action.
+// support) as the company's fixed ONE_ON_ONE/TEAM/OWNERSHIP meetings. See
+// lib/chat-bot.ts's create_meeting tool for the chat-driven equivalent,
+// which only ever creates one-offs.
 export async function POST(req: NextRequest) {
   const viewer = await getCurrentViewer();
   if (!viewer) {
@@ -24,6 +31,9 @@ export async function POST(req: NextRequest) {
   const time = typeof body?.time === "string" ? body.time : "";
   const durationMinsRaw = Number(body?.durationMins);
   const durationMins = Number.isFinite(durationMinsRaw) ? Math.min(480, Math.max(5, Math.round(durationMinsRaw))) : 30;
+  const recurrenceIntervalDays = VALID_RECURRENCE_INTERVALS.includes(Number(body?.recurrenceIntervalDays))
+    ? Number(body.recurrenceIntervalDays)
+    : null;
   const requestedParticipantIds = Array.isArray(body?.participantUserIds)
     ? body.participantUserIds.filter((id: unknown): id is string => typeof id === "string")
     : [];
@@ -58,7 +68,8 @@ export async function POST(req: NextRequest) {
 
   const series = await prisma.meetingSeries.create({
     data: {
-      type: "ONE_OFF",
+      type: recurrenceIntervalDays ? "RECURRING" : "ONE_OFF",
+      recurrenceIntervalDays,
       name: title,
       durationMins,
       color: colorForIndex(seriesCount),

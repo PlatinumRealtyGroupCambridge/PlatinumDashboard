@@ -183,6 +183,7 @@ export default function MeetingApp({
     time: string;
     durationMins: number;
     participantUserIds: string[];
+    recurrenceIntervalDays?: number;
   }) {
     const { series } = await apiJson("/api/meetings", "POST", input);
     setData((d) => ({ ...d, series: [...d.series, series] }));
@@ -190,11 +191,21 @@ export default function MeetingApp({
     setOpenMeeting({ seriesId: series.id, instanceId: series.instances[0].id });
   }
 
-  async function deleteMeeting(instanceId: string) {
-    await apiJson(`/api/meeting-instances/${instanceId}`, "DELETE");
+  async function deleteMeeting(instanceId: string, seriesId: string, scope: "this" | "all_future") {
+    await apiJson(`/api/meeting-instances/${instanceId}`, "DELETE", { scope });
     setData((d) => {
       const series = d.series
-        .map((s) => ({ ...s, instances: s.instances.filter((i) => i.id !== instanceId) }))
+        .map((s) => {
+          if (s.id !== seriesId) return s;
+          if (scope === "all_future") {
+            // The series keeps recurring up to this point, but every
+            // not-yet-happened occurrence is gone — mirror that locally
+            // rather than just removing the one instance being viewed.
+            const now = Date.now();
+            return { ...s, instances: s.instances.filter((i) => new Date(i.startsAt).getTime() < now) };
+          }
+          return { ...s, instances: s.instances.filter((i) => i.id !== instanceId) };
+        })
         // A one-off meeting's series is deleted server-side along with its
         // one and only instance (see deleteMeetingInstance's comment) — mirror
         // that here so it doesn't linger in local state as an empty series.
@@ -305,7 +316,7 @@ export default function MeetingApp({
           onAddAgendaItem={(title) => addAgendaItem(instance.id, title)}
           onTable={tableToNextMeeting}
           onDelete={deleteAgendaItem}
-          onDeleteMeeting={() => deleteMeeting(instance.id)}
+          onDeleteMeeting={(scope) => deleteMeeting(instance.id, series.id, scope)}
           openTaskFormFor={openTaskFormFor}
           setOpenTaskFormFor={setOpenTaskFormFor}
           onCreateTask={createTaskFromAgendaItem}
@@ -440,6 +451,7 @@ function NewMeetingForm({
     time: string;
     durationMins: number;
     participantUserIds: string[];
+    recurrenceIntervalDays?: number;
   }) => Promise<void>;
   onCancel: () => void;
 }) {
@@ -447,6 +459,7 @@ function NewMeetingForm({
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
   const [durationMins, setDurationMins] = useState(30);
+  const [repeats, setRepeats] = useState<"none" | "7" | "14" | "30">("none");
   const [participantIds, setParticipantIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -465,7 +478,14 @@ function NewMeetingForm({
     setError(null);
     setSaving(true);
     try {
-      await onCreate({ title: title.trim(), date, time, durationMins, participantUserIds: participantIds });
+      await onCreate({
+        title: title.trim(),
+        date,
+        time,
+        durationMins,
+        participantUserIds: participantIds,
+        recurrenceIntervalDays: repeats === "none" ? undefined : Number(repeats),
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create the meeting.");
       setSaving(false);
@@ -502,6 +522,15 @@ function NewMeetingForm({
             <option value={60}>1 hour</option>
             <option value={90}>1.5 hours</option>
             <option value={120}>2 hours</option>
+          </select>
+        </label>
+        <label>
+          Repeats
+          <select value={repeats} onChange={(e) => setRepeats(e.target.value as typeof repeats)}>
+            <option value="none">Does not repeat</option>
+            <option value="7">Weekly</option>
+            <option value="14">Every 2 weeks</option>
+            <option value="30">Monthly</option>
           </select>
         </label>
       </div>
@@ -685,7 +714,7 @@ function MeetingsList({
         );
       })}
 
-      <div className="section-label">Team &amp; ownership meetings</div>
+      <div className="section-label">Team, ownership &amp; recurring meetings</div>
       {others.length === 0 && <div className="card empty-state">None scheduled.</div>}
       {others.map((s) => {
         const inst = nextInstance(s);
@@ -739,7 +768,7 @@ function LiveMeeting({
   onAddAgendaItem: (title: string) => void;
   onTable: (item: AgendaItemData) => void;
   onDelete: (item: AgendaItemData) => void;
-  onDeleteMeeting: () => Promise<void>;
+  onDeleteMeeting: (scope: "this" | "all_future") => Promise<void>;
   openTaskFormFor: string | null;
   setOpenTaskFormFor: (id: string | null) => void;
   onCreateTask: (item: AgendaItemData, title: string, assigneeId: string, dueDate: string) => void;
@@ -785,7 +814,7 @@ function LiveMeeting({
             <button className="btn ghost-danger" onClick={() => setConfirmingDeleteMeeting(true)}>
               Delete meeting
             </button>
-          ) : (
+          ) : series.type === "ONE_OFF" ? (
             <span className="delete-meeting-confirm">
               <span className="owner-chip">Delete this meeting?</span>
               <button
@@ -794,13 +823,48 @@ function LiveMeeting({
                 onClick={async () => {
                   setDeletingMeeting(true);
                   try {
-                    await onDeleteMeeting();
+                    await onDeleteMeeting("this");
                   } catch {
                     setDeletingMeeting(false);
                   }
                 }}
               >
                 {deletingMeeting ? "Deleting…" : "Yes, delete"}
+              </button>
+              <button className="btn" disabled={deletingMeeting} onClick={() => setConfirmingDeleteMeeting(false)}>
+                Cancel
+              </button>
+            </span>
+          ) : (
+            <span className="delete-meeting-confirm">
+              <span className="owner-chip">Delete just this one, or all future meetings?</span>
+              <button
+                className="btn ghost-danger"
+                disabled={deletingMeeting}
+                onClick={async () => {
+                  setDeletingMeeting(true);
+                  try {
+                    await onDeleteMeeting("this");
+                  } catch {
+                    setDeletingMeeting(false);
+                  }
+                }}
+              >
+                {deletingMeeting ? "Deleting…" : "Just this one"}
+              </button>
+              <button
+                className="btn ghost-danger"
+                disabled={deletingMeeting}
+                onClick={async () => {
+                  setDeletingMeeting(true);
+                  try {
+                    await onDeleteMeeting("all_future");
+                  } catch {
+                    setDeletingMeeting(false);
+                  }
+                }}
+              >
+                {deletingMeeting ? "Deleting…" : "All future meetings"}
               </button>
               <button className="btn" disabled={deletingMeeting} onClick={() => setConfirmingDeleteMeeting(false)}>
                 Cancel

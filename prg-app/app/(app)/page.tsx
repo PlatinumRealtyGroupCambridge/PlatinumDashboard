@@ -24,7 +24,7 @@ export default async function HomePage() {
 
   const [mySeries, myOpenTasks, myOverdueTasks] = await Promise.all([
     prisma.meetingSeries.findMany({
-      where: { participants: { some: { userId: viewer.id } } },
+      where: { active: true, participants: { some: { userId: viewer.id } } },
       include: {
         instances: {
           where: { startsAt: { gte: now } },

@@ -23,6 +23,11 @@ enum MeetingType {
   // app/api/meetings/route.ts (manual "+ New meeting" button) and
   // lib/chat-bot.ts's create_meeting tool (chat-requested one-offs).
   ONE_OFF
+  // An ad-hoc recurring meeting set up via the "+ New meeting" button's
+  // "Repeats" option — distinct from ONE_ON_ONE/TEAM/OWNERSHIP, which are
+  // the company's fixed, named recurring meetings. See
+  // MeetingSeries.recurrenceIntervalDays for how often it repeats.
+  RECURRING
 }
 
 enum GoalStatus {
@@ -184,6 +189,23 @@ model MeetingSeries {
   // set only for ONE_ON_ONE series, points at the non-Tim participant
   ownerId       String?
   owner         User?       @relation("OneOnOneOwner", fields: [ownerId], references: [id])
+
+  // How many days apart occurrences are, for a RECURRING series created via
+  // the "+ New meeting" button's "Repeats" option (7/14/30). Null for
+  // ONE_OFF (irrelevant) and for the fixed ONE_ON_ONE/TEAM/OWNERSHIP types,
+  // which instead fall back to their historical hardcoded cadence (weekly,
+  // or monthly for OWNERSHIP) in lib/meetings-server.ts — this column only
+  // needed to exist once recurrence became user-configurable.
+  recurrenceIntervalDays Int?
+
+  // False once someone chooses "Delete all future meetings" on a recurring
+  // series — see lib/meetings-server.ts's deleteFutureInstancesAndEndSeries.
+  // Past instances (and their agenda items/attendance history) are kept;
+  // this just stops new occurrences from ever being generated again, and
+  // every series-listing query filters to active: true so an ended series
+  // quietly disappears from calendars, lists, and the chat bot instead of
+  // being deleted outright.
+  active        Boolean     @default(true)
 
   participants  MeetingParticipant[]
   instances     MeetingInstance[]

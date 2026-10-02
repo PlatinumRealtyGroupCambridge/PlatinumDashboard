@@ -16,6 +16,7 @@ export async function getMeetingManagementData(
   const [users, allSeries, tasks, goals] = await Promise.all([
     prisma.user.findMany({ orderBy: { name: "asc" } }),
     prisma.meetingSeries.findMany({
+      where: { active: true },
       include: {
         participants: true,
         instances: {

@@ -124,7 +124,7 @@ export async function handleChatMessage(rawEvent: ChatEvent): Promise<string> {
   const conversationCutoff = new Date(Date.now() - CONVERSATION_WINDOW_MINUTES * 60 * 1000);
   const [mySeries, allUsers, activeGoals, pendingFollowUp, recentTurnsDesc] = await Promise.all([
     prisma.meetingSeries.findMany({
-      where: { participants: { some: { userId: user.id } } },
+      where: { active: true, participants: { some: { userId: user.id } } },
       orderBy: { name: "asc" },
     }),
     prisma.user.findMany({ orderBy: { name: "asc" } }),
