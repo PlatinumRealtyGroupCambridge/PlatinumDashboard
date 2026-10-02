@@ -1,18 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentViewer } from "@/lib/auth";
 import { nyTodayISO } from "@/lib/timezone";
-import { getOpenWorkOrderStats, getAvgDaysToClose } from "@/lib/maintenance-mock";
+import { getOpenWorkOrderStats, getAvgDaysToClose12Month } from "@/lib/rentvine";
+import { RentvineNotConfiguredError } from "@/lib/rentvine-auth";
 import { getMaintenanceFinancials } from "@/lib/quickbooks";
 import { QuickBooksReconnectRequiredError } from "@/lib/quickbooks-auth";
 
 // Backs the Maintenance Dashboard (components/MaintenanceDashboard.tsx).
 // Work-order stats (open count, needs-attention, avg days to close) are
-// still fake, pending a Rentvine connection — see lib/maintenance-mock.ts.
-// The labor/trip-charge/gas totals are real, pulled live from QuickBooks
-// via lib/quickbooks.ts. If that call fails (not connected, API error),
-// this deliberately returns rangeTotals: null with an explanatory message
-// rather than silently falling back to fake numbers that could be
-// mistaken for real ones on a financial dashboard.
+// pulled live from Rentvine via lib/rentvine.ts. The labor/trip-charge/gas
+// totals are separately pulled live from QuickBooks via lib/quickbooks.ts.
+// The two sources are independent and fail independently — if either is
+// down or not yet connected, this deliberately returns that half as null
+// with an explanatory message rather than silently falling back to fake
+// numbers that could be mistaken for real ones on a financial dashboard.
 //
 // Query params: ?preset=this_month|last_month|ytd|custom, and for
 // "custom", &from=YYYY-MM-DD&to=YYYY-MM-DD.
@@ -76,15 +77,27 @@ export async function GET(req: NextRequest) {
     fromISO = startOfMonth(todayISO);
   }
 
-  const dayStats = getOpenWorkOrderStats(todayISO);
-  const avgDaysToClose = getAvgDaysToClose(fromISO, toISO, todayISO);
+  let dayStats: Awaited<ReturnType<typeof getOpenWorkOrderStats>> | null = null;
+  let avgDaysToClose: number | null = null;
+  let rentvineError: string | null = null;
+  try {
+    [dayStats, avgDaysToClose] = await Promise.all([
+      getOpenWorkOrderStats(todayISO),
+      getAvgDaysToClose12Month(toISO),
+    ]);
+  } catch (err) {
+    if (err instanceof RentvineNotConfiguredError) {
+      rentvineError = "Rentvine isn't connected yet — an admin needs to add the Rentvine API key.";
+    } else {
+      console.error("Maintenance dashboard: Rentvine work order stats failed", err);
+      rentvineError = "Couldn't load work order data from Rentvine right now — please try again in a moment.";
+    }
+  }
 
-  let rangeTotals: (Awaited<ReturnType<typeof getMaintenanceFinancials>> & { avgDaysToClose: number | null }) | null =
-    null;
+  let rangeTotals: Awaited<ReturnType<typeof getMaintenanceFinancials>> | null = null;
   let financialsError: string | null = null;
   try {
-    const financials = await getMaintenanceFinancials(fromISO, toISO);
-    rangeTotals = { avgDaysToClose, ...financials };
+    rangeTotals = await getMaintenanceFinancials(fromISO, toISO);
   } catch (err) {
     if (err instanceof QuickBooksReconnectRequiredError) {
       financialsError = "QuickBooks isn't connected — an admin needs to reconnect it on the QuickBooks Connection page.";
@@ -94,5 +107,12 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ dayStats, rangeTotals, financialsError, range: { from: fromISO, to: toISO } });
+  return NextResponse.json({
+    dayStats,
+    avgDaysToClose,
+    rentvineError,
+    rangeTotals,
+    financialsError,
+    range: { from: fromISO, to: toISO },
+  });
 }

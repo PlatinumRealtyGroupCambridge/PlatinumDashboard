@@ -16,7 +16,6 @@ type TrendPoint = {
 
 type DayStats = { openWorkOrders: number; needsAttention: number };
 type RangeTotals = {
-  avgDaysToClose: number | null;
   laborBilledGross: number;
   laborDiscount: number;
   laborBilledNet: number;
@@ -59,7 +58,6 @@ const LABOR_ITEMS_TEXT =
   "105/205 Property Manager – Business Hours, 106/206 – After Hours, 107/207 – Sundays & Holidays, 108/208 – Emergency Rate; 305/309 Maintenance Tech – Business Hours, 306/310 – After Hours, 307/311 – Sundays & Holidays, 308/312 – Emergency Rate (HOA/Rental pairs). Landscaping is tracked separately.";
 const DISCOUNT_ITEMS_TEXT =
   "501 - Discount - Labor - Maintenance - HOA and 502 - Discount - Labor - Maintenance - RENTAL (stored as negative amounts in QuickBooks).";
-const RENTVINE_PENDING_TEXT = "Sample data for now — not yet connected to Rentvine.";
 
 function StatTile({ label, value, calculation }: { label: string; value: React.ReactNode; calculation: string }) {
   return (
@@ -94,6 +92,8 @@ export default function MaintenanceDashboard({
   const [from, setFrom] = useState(todayInput());
   const [to, setTo] = useState(todayInput());
   const [dayStats, setDayStats] = useState<DayStats | null>(null);
+  const [avgDaysToClose, setAvgDaysToClose] = useState<number | null>(null);
+  const [rentvineError, setRentvineError] = useState<string | null>(null);
   const [rangeTotals, setRangeTotals] = useState<RangeTotals | null>(null);
   const [financialsError, setFinancialsError] = useState<string | null>(null);
   const [rangeShown, setRangeShown] = useState<{ from: string; to: string } | null>(null);
@@ -200,6 +200,8 @@ export default function MaintenanceDashboard({
         const json = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(json?.error || "Failed to load maintenance stats.");
         setDayStats(json.dayStats);
+        setAvgDaysToClose(json.avgDaysToClose ?? null);
+        setRentvineError(json.rentvineError ?? null);
         setRangeTotals(json.rangeTotals);
         setFinancialsError(json.financialsError ?? null);
         setRangeShown(json.range);
@@ -216,39 +218,27 @@ export default function MaintenanceDashboard({
       {error && <div className="login-error">{error}</div>}
 
       <div className="section-label">Today</div>
-      <div
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 8,
-          fontSize: 12,
-          fontWeight: 600,
-          color: "var(--text-muted)",
-          background: "var(--page)",
-          border: "1px solid var(--border)",
-          borderRadius: 999,
-          padding: "5px 12px",
-          marginBottom: 14,
-        }}
-      >
-        <span
-          className="dot"
-          style={{ background: "var(--series-brown)", width: 8, height: 8, borderRadius: "50%" }}
-        />
-        Sample data for now — not yet connected to Rentvine
-      </div>
-      <div className="stat-row" style={{ gridTemplateColumns: "repeat(2, 1fr)" }}>
-        <StatTile
-          label="# of open work orders"
-          value={loading ? "—" : (dayStats?.openWorkOrders ?? "—")}
-          calculation={`Work orders that are not yet closed, as of today. ${RENTVINE_PENDING_TEXT}`}
-        />
-        <StatTile
-          label="# of work orders that need attention (no update in 3+ days)"
-          value={loading ? "—" : (dayStats?.needsAttention ?? "—")}
-          calculation={`Open work orders with no update logged in 3 or more days. ${RENTVINE_PENDING_TEXT}`}
-        />
-      </div>
+      {!loading && rentvineError ? (
+        <div className="card" style={{ padding: 20, marginBottom: 16 }}>
+          <p style={{ color: "var(--critical)", fontSize: 13.5, margin: 0, fontWeight: 600 }}>
+            Couldn&apos;t load Rentvine data
+          </p>
+          <p style={{ color: "var(--text-muted)", fontSize: 13, margin: "6px 0 0" }}>{rentvineError}</p>
+        </div>
+      ) : (
+        <div className="stat-row" style={{ gridTemplateColumns: "repeat(2, 1fr)" }}>
+          <StatTile
+            label="# of open work orders"
+            value={loading ? "—" : (dayStats?.openWorkOrders ?? "—")}
+            calculation="Work orders in Rentvine with a status of Requested, Open, or On Hold, as of today."
+          />
+          <StatTile
+            label="# of work orders that need attention (no update in 3+ days)"
+            value={loading ? "—" : (dayStats?.needsAttention ?? "—")}
+            calculation="Open work orders (Requested, Open, or On Hold) that haven't had a status or note update logged in 3 or more days, as of today."
+          />
+        </div>
+      )}
 
       <div className="section-label">Work orders &amp; costs</div>
       <div className="efficiency-filters">
@@ -291,6 +281,16 @@ export default function MaintenanceDashboard({
         </p>
       )}
 
+      {!rentvineError && (
+        <div className="stat-row" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", marginBottom: 16 }}>
+          <StatTile
+            label="Days to close a work order (avg)"
+            value={loading ? "—" : avgDaysToClose != null ? `${avgDaysToClose.toFixed(1)} days` : "—"}
+            calculation="Average days between opening and closing, across work orders closed in the trailing 12 months ending on the last day of the month shown above."
+          />
+        </div>
+      )}
+
       {!loading && financialsError ? (
         <div className="card" style={{ padding: 20, marginBottom: 16 }}>
           <p style={{ color: "var(--critical)", fontSize: 13.5, margin: 0, fontWeight: 600 }}>
@@ -301,11 +301,6 @@ export default function MaintenanceDashboard({
       ) : (
         <>
           <div className="stat-row" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
-            <StatTile
-              label="Days to close a work order (avg)"
-              value={loading ? "—" : rangeTotals?.avgDaysToClose != null ? `${rangeTotals.avgDaysToClose.toFixed(1)} days` : "—"}
-              calculation={`Average days between opening and closing, across work orders closed within the selected range. ${RENTVINE_PENDING_TEXT}`}
-            />
             <StatTile
               label="Total trip charge revenue"
               value={loading ? "—" : rangeTotals ? formatCurrency(rangeTotals.tripChargeRevenue) : "—"}
