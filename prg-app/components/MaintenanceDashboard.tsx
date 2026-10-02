@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { formatCurrency, formatHours } from "@/lib/format";
 import MaintenanceTrendChart from "./MaintenanceTrendChart";
 
@@ -15,14 +16,6 @@ type TrendPoint = {
 };
 
 type DayStats = { pendingWorkOrders: number; openWorkOrders: number; onHoldWorkOrders: number; needsAttention: number };
-type NeedsAttentionWorkOrder = {
-  workOrderNumber: number;
-  rentvineUrl: string;
-  propertyCode: string | null;
-  unitCode: string | null;
-  description: string;
-  lastUpdated: string | null;
-};
 type RangeTotals = {
   laborBilledGross: number;
   laborDiscount: number;
@@ -71,24 +64,29 @@ function StatTile({
   label,
   value,
   calculation,
-  onClick,
+  href,
 }: {
   label: string;
   value: React.ReactNode;
   calculation: string;
-  onClick?: () => void;
+  href?: string;
 }) {
-  return (
-    <div
-      className="stat-tile"
-      title={`Calculation: ${calculation}`}
-      onClick={onClick}
-      role={onClick ? "button" : undefined}
-      tabIndex={onClick ? 0 : undefined}
-      style={onClick ? { cursor: "pointer" } : undefined}
-    >
-      <div className="label">{label}{onClick ? " ▾" : ""}</div>
+  const inner = (
+    <>
+      <div className="label">{label}{href ? " →" : ""}</div>
       <div className="value">{value}</div>
+    </>
+  );
+  if (href) {
+    return (
+      <Link href={href} className="stat-tile" title={`Calculation: ${calculation}`} style={{ textDecoration: "none", color: "inherit" }}>
+        {inner}
+      </Link>
+    );
+  }
+  return (
+    <div className="stat-tile" title={`Calculation: ${calculation}`}>
+      {inner}
     </div>
   );
 }
@@ -135,35 +133,6 @@ export default function MaintenanceDashboard({
   const [landscapingGoalInput, setLandscapingGoalInput] = useState("");
   const [savingLandscapingGoal, setSavingLandscapingGoal] = useState(false);
   const [refreshNonce, setRefreshNonce] = useState(0);
-  const [needsAttentionOpen, setNeedsAttentionOpen] = useState(false);
-  const [needsAttentionList, setNeedsAttentionList] = useState<NeedsAttentionWorkOrder[] | null>(null);
-  const [needsAttentionLoading, setNeedsAttentionLoading] = useState(false);
-  const [needsAttentionError, setNeedsAttentionError] = useState<string | null>(null);
-
-  // The click-through list is "as of today" data, same as dayStats, so a
-  // refresh triggered elsewhere on the page (e.g. saving a goal) should
-  // invalidate the cached list rather than show something stale next time
-  // it's reopened.
-  useEffect(() => {
-    setNeedsAttentionList(null);
-    setNeedsAttentionOpen(false);
-  }, [refreshNonce]);
-
-  function toggleNeedsAttention() {
-    const opening = !needsAttentionOpen;
-    setNeedsAttentionOpen(opening);
-    if (!opening || needsAttentionList != null) return;
-    setNeedsAttentionLoading(true);
-    setNeedsAttentionError(null);
-    fetch("/api/maintenance/needs-attention")
-      .then(async (res) => {
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok || json.error) throw new Error(json?.error || "Failed to load the list.");
-        setNeedsAttentionList(json.workOrders);
-      })
-      .catch((err) => setNeedsAttentionError(err instanceof Error ? err.message : "Failed to load the list."))
-      .finally(() => setNeedsAttentionLoading(false));
-  }
 
   // Admin-only: the raw monthly goal figures (not the prorated per-range
   // values shown in the tiles below), fetched once for the edit controls.
@@ -300,56 +269,8 @@ export default function MaintenanceDashboard({
             label="# of work orders that need attention (no update in 3+ days)"
             value={loading ? "—" : (dayStats?.needsAttention ?? "—")}
             calculation="Work orders in Rentvine with a status of Requested, Open, or On Hold that haven't had a status or note update logged in 3 or more days, as of today. Click to see the list."
-            onClick={toggleNeedsAttention}
+            href="/maintenance/needs-attention"
           />
-        </div>
-      )}
-
-      {needsAttentionOpen && (
-        <div className="card" style={{ padding: 16, marginBottom: 16 }}>
-          <p style={{ fontWeight: 700, fontSize: 13, margin: "0 0 10px" }}>Work orders needing attention</p>
-          {needsAttentionLoading && <p style={{ color: "var(--text-muted)", fontSize: 13, margin: 0 }}>Loading…</p>}
-          {needsAttentionError && (
-            <p style={{ color: "var(--critical)", fontSize: 13, margin: 0 }}>{needsAttentionError}</p>
-          )}
-          {!needsAttentionLoading && !needsAttentionError && needsAttentionList && (
-            needsAttentionList.length === 0 ? (
-              <p style={{ color: "var(--text-muted)", fontSize: 13, margin: 0 }}>Nothing needs attention right now.</p>
-            ) : (
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                  <thead>
-                    <tr style={{ textAlign: "left", color: "var(--text-muted)" }}>
-                      <th style={{ padding: "4px 8px" }}>WO #</th>
-                      <th style={{ padding: "4px 8px" }}>Property / Unit</th>
-                      <th style={{ padding: "4px 8px" }}>Description</th>
-                      <th style={{ padding: "4px 8px" }}>Last updated</th>
-                      <th style={{ padding: "4px 8px" }} />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {needsAttentionList.map((wo) => (
-                      <tr key={wo.workOrderNumber} style={{ borderTop: "1px solid var(--border)" }}>
-                        <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>{wo.workOrderNumber}</td>
-                        <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>
-                          {[wo.propertyCode, wo.unitCode].filter(Boolean).join(" / ") || "—"}
-                        </td>
-                        <td style={{ padding: "6px 8px" }}>{wo.description}</td>
-                        <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>
-                          {wo.lastUpdated ? wo.lastUpdated.slice(0, 10) : "—"}
-                        </td>
-                        <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>
-                          <a href={wo.rentvineUrl} target="_blank" rel="noopener noreferrer">
-                            Open in Rentvine ↗
-                          </a>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )
-          )}
         </div>
       )}
 

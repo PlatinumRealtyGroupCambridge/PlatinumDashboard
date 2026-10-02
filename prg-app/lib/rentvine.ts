@@ -14,11 +14,38 @@ import { fetchRentvineApi, rentvineAppUrl } from "./rentvine-auth";
 type ReportFilter = Record<string, unknown>;
 type ReportRow = Record<string, unknown>;
 
-function parseReportRows(raw: unknown): ReportRow[] {
-  if (Array.isArray(raw)) return raw as ReportRow[];
-  const obj = raw as { data?: unknown; results?: unknown; rows?: unknown } | null;
-  const candidate = obj?.data ?? obj?.results ?? obj?.rows;
-  return Array.isArray(candidate) ? (candidate as ReportRow[]) : [];
+// A row might come back as a keyed object ({ workOrderNumber: ..., ... }),
+// which is what getOpenWorkOrderStats' counts (row-array .length only,
+// never reading a field) couldn't have told us either way — or as a plain
+// positional array matching displayColumns' order, which a CSV/Excel-style
+// export commonly uses instead. Normalize either into a keyed object so
+// every caller can just read fields by name.
+function normalizeRow(row: unknown, displayColumns: string[]): ReportRow | null {
+  if (row == null) return null;
+  if (Array.isArray(row)) {
+    const obj: ReportRow = {};
+    displayColumns.forEach((col, i) => {
+      obj[col] = row[i];
+    });
+    return obj;
+  }
+  if (typeof row === "object") return row as ReportRow;
+  return null;
+}
+
+function parseReportRows(raw: unknown, displayColumns: string[]): ReportRow[] {
+  const rawRows: unknown[] = Array.isArray(raw)
+    ? raw
+    : Array.isArray((raw as { data?: unknown })?.data)
+      ? ((raw as { data: unknown[] }).data)
+      : Array.isArray((raw as { results?: unknown })?.results)
+        ? ((raw as { results: unknown[] }).results)
+        : Array.isArray((raw as { rows?: unknown })?.rows)
+          ? ((raw as { rows: unknown[] }).rows)
+          : [];
+  return rawRows
+    .map((row) => normalizeRow(row, displayColumns))
+    .filter((r): r is ReportRow => r != null);
 }
 
 async function runWorkOrderReport(displayColumns: string[], filters: ReportFilter[]): Promise<ReportRow[]> {
@@ -29,7 +56,15 @@ async function runWorkOrderReport(displayColumns: string[], filters: ReportFilte
     showHeader: "true",
     json,
   });
-  return parseReportRows(raw);
+  const rows = parseReportRows(raw, displayColumns);
+  // Diagnostic safety net: if rows parsed out to nothing, it's impossible
+  // to tell from here whether that's a genuinely empty result or a shape
+  // this parser still doesn't recognize — log a sample so Vercel's
+  // function logs can settle it without another guess-and-redeploy cycle.
+  if (rows.length === 0) {
+    console.error("Rentvine work-order report returned 0 parsed rows — raw response sample:", JSON.stringify(raw).slice(0, 500));
+  }
+  return rows;
 }
 
 // Rentvine's "Primary Work Order Status" groups its ~12 custom pipeline
