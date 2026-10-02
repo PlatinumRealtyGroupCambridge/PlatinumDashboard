@@ -168,6 +168,12 @@ async function getExcludedPropertyAndUnitIds(): Promise<{ propertyIds: Set<numbe
   return { propertyIds, unitIds };
 }
 
+function isExcludedRow(r: ReportRow, excluded: { propertyIds: Set<number>; unitIds: Set<number> }): boolean {
+  const propertyId = num(r.propertyID);
+  const unitId = num(r.unitID);
+  return (propertyId != null && excluded.propertyIds.has(propertyId)) || (unitId != null && excluded.unitIds.has(unitId));
+}
+
 export type NeedsAttentionWorkOrder = {
   workOrderNumber: number;
   rentvineUrl: string;
@@ -211,12 +217,7 @@ export async function getNeedsAttentionWorkOrders(
       const workOrderId = num(r.workOrderID);
       const workOrderNumber = num(r.workOrderNumber);
       if (workOrderId == null || workOrderNumber == null) return null;
-      const propertyId = num(r.propertyID);
-      const unitId = num(r.unitID);
-      const isExcluded =
-        (propertyId != null && excluded.propertyIds.has(propertyId)) ||
-        (unitId != null && excluded.unitIds.has(unitId));
-      if (isExcluded) return null;
+      if (isExcludedRow(r, excluded)) return null;
       const lastUpdated = str(r.dateTimeModified) ?? null;
       return {
         workOrderNumber,
@@ -253,20 +254,23 @@ export async function getOpenWorkOrderStats(todayISO: string): Promise<{
     comparator: "equals",
     value: statusId,
   });
-  const [pending, open, onHold, stale] = await Promise.all([
-    runWorkOrderReport(["workOrderNumber"], [statusFilter("1")]),
-    runWorkOrderReport(["workOrderNumber"], [statusFilter("2")]),
-    runWorkOrderReport(["workOrderNumber"], [statusFilter("4")]),
-    runWorkOrderReport(["workOrderNumber"], [
+  const idColumns = ["workOrderNumber", "propertyID", "unitID"];
+  const [pending, open, onHold, stale, excluded] = await Promise.all([
+    runWorkOrderReport(idColumns, [statusFilter("1")]),
+    runWorkOrderReport(idColumns, [statusFilter("2")]),
+    runWorkOrderReport(idColumns, [statusFilter("4")]),
+    runWorkOrderReport(idColumns, [
       { name: "primaryWorkOrderStatusID", comparator: "in", values: OPEN_PRIMARY_STATUSES },
       { name: "dateTimeModified", comparator: "onOrBeforeDateRange", endDate: addDays(todayISO, -3) },
     ]),
+    getExcludedPropertyAndUnitIds(),
   ]);
+  const countNonExcluded = (rows: ReportRow[]) => rows.filter((r) => !isExcludedRow(r, excluded)).length;
   return {
-    pendingWorkOrders: pending.rows.length,
-    openWorkOrders: open.rows.length,
-    onHoldWorkOrders: onHold.rows.length,
-    needsAttention: stale.rows.length,
+    pendingWorkOrders: countNonExcluded(pending.rows),
+    openWorkOrders: countNonExcluded(open.rows),
+    onHoldWorkOrders: countNonExcluded(onHold.rows),
+    needsAttention: countNonExcluded(stale.rows),
   };
 }
 
