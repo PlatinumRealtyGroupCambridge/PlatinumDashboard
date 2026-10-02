@@ -126,6 +126,15 @@ export async function handleChatMessage(rawEvent: ChatEvent): Promise<string> {
     prisma.meetingSeries.findMany({
       where: { active: true, participants: { some: { userId: user.id } } },
       orderBy: { name: "asc" },
+      include: {
+        participants: { include: { user: true } },
+        // Just the soonest upcoming one, read-only — this doesn't create a
+        // new instance the way getOrCreateNextInstance does, it only shows
+        // what's already on the calendar, which is enough to tell "next
+        // meeting with X" apart across several candidates sharing that
+        // person (e.g. a recurring 1-on-1 plus an occasional one-off).
+        instances: { where: { startsAt: { gte: new Date() } }, orderBy: { startsAt: "asc" }, take: 1 },
+      },
     }),
     prisma.user.findMany({ orderBy: { name: "asc" } }),
     // Archived goals are already achieved/closed out — not sensible targets
@@ -146,7 +155,20 @@ export async function handleChatMessage(rawEvent: ChatEvent): Promise<string> {
     .reverse()
     .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
 
-  const action = await parseRequest(rawText, user, mySeries, allUsers, activeGoals, pendingFollowUp, conversationHistory);
+  // Flattened for the prompt: who else is in each meeting (so a one-off
+  // like "Roof repair walkthrough" is still recognizable as "a meeting with
+  // Matt" even though his name isn't in the title), and its next upcoming
+  // date if one's already on the calendar — see parseRequest's system
+  // prompt for how this resolves "my next meeting with X" when more than
+  // one of the sender's meetings involves that person.
+  const mySeriesForPrompt = mySeries.map((s) => ({
+    id: s.id,
+    name: s.name,
+    otherParticipantNames: s.participants.filter((p) => p.userId !== user.id).map((p) => p.user.name.split(" ")[0]),
+    nextDate: s.instances[0]?.startsAt.toISOString().slice(0, 10) ?? null,
+  }));
+
+  const action = await parseRequest(rawText, user, mySeriesForPrompt, allUsers, activeGoals, pendingFollowUp, conversationHistory);
   const reply = await executeAction(action, user, pendingFollowUp);
 
   // Remember this exchange for next time, and forget anything that's aged
@@ -348,7 +370,7 @@ type PendingFollowUp = { itemType: string; itemId: string; itemTitle: string } |
 async function parseRequest(
   text: string,
   sender: { id: string; name: string },
-  mySeries: { id: string; name: string }[],
+  mySeries: { id: string; name: string; otherParticipantNames: string[]; nextDate: string | null }[],
   allUsers: { id: string; name: string }[],
   activeGoals: { id: string; title: string }[],
   pendingFollowUp: PendingFollowUp,
@@ -366,8 +388,10 @@ async function parseRequest(
 Today's date: ${today}
 Message sender: ${sender.name}
 ${pendingNote}${historyNote}
-Meetings ${sender.name} can add agenda items to or cancel (use these exact ids, and ONLY these — the sender cannot add to or cancel meetings they don't attend). This list mixes recurring meeting series and one-off meetings together — there is no distinction between the two for add_agenda_item or delete_meeting, both work exactly the same way on either kind:
-${mySeries.map((s) => `- ${s.id}: ${s.name}`).join("\n") || "(none)"}
+Meetings ${sender.name} can add agenda items to or cancel (use these exact ids, and ONLY these — the sender cannot add to or cancel meetings they don't attend). This list mixes recurring meeting series and one-off meetings together — there is no distinction between the two for add_agenda_item or delete_meeting, both work exactly the same way on either kind. "with" is everyone else in that meeting (not counting ${sender.name}); "next" is its next scheduled date if one exists yet:
+${mySeries.map((s) => `- ${s.id}: ${s.name} (with: ${s.otherParticipantNames.join(", ") || "no one else"}; next: ${s.nextDate ?? "none scheduled yet"})`).join("\n") || "(none)"}
+
+If the sender refers to "my next meeting with <person>" and more than one meeting above has that person in its "with" list (e.g. a recurring 1-on-1 plus an occasional one-off meeting outside it), don't ask which one they mean — just use whichever has the earliest "next" date. Only ask for clarification if none of them have a "with" match, or if two tie on the exact same date.
 
 Team members tasks/goals/new meetings can involve (use these exact ids):
 ${allUsers.map((u) => `- ${u.id}: ${u.name}`).join("\n")}
