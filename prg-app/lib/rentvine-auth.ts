@@ -63,3 +63,10 @@ export async function fetchRentvineApi(path: string, params?: Record<string, str
 export function isRentvineConfigured(): boolean {
   return Boolean(process.env.RENTVINE_ACCOUNT && process.env.RENTVINE_API_KEY && process.env.RENTVINE_API_SECRET);
 }
+
+// Builds a link into Rentvine's own web app (not the API) — e.g. for
+// linking a dashboard row straight through to that record in Rentvine.
+export function rentvineAppUrl(path: string): string {
+  const account = requireEnv("RENTVINE_ACCOUNT");
+  return `https://${account}.rentvine.com${path}`;
+}

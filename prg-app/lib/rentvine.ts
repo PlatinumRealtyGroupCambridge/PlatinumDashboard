@@ -1,4 +1,4 @@
-import { fetchRentvineApi } from "./rentvine-auth";
+import { fetchRentvineApi, rentvineAppUrl } from "./rentvine-auth";
 
 // Work-order metrics for the Maintenance Dashboard, pulled live from
 // Rentvine's "Work Order" report. The endpoint path and query shape below
@@ -72,6 +72,57 @@ function num(v: unknown): number | undefined {
   if (typeof v === "number") return v;
   if (typeof v === "string" && v.trim() !== "" && !Number.isNaN(Number(v))) return Number(v);
   return undefined;
+}
+function str(v: unknown): string | undefined {
+  return typeof v === "string" && v.trim() !== "" ? v : undefined;
+}
+
+// Rentvine's own UI links to a work order by its internal numeric id (e.g.
+// /maintenance/work-orders/411), not the "WO #100411" number shown
+// everywhere else — confirmed against several real work orders in this
+// account where the difference was consistently exactly 100000 (WO
+// #100411 -> id 411, WO #100172 -> id 172, WO #100130 -> id 130). Not
+// documented anywhere, so if Rentvine ever changes this numbering scheme
+// these links would need revisiting — but it fails harmlessly (a dead
+// link someone would notice and report) rather than breaking anything else.
+const WORK_ORDER_DISPLAY_NUMBER_OFFSET = 100000;
+
+export type NeedsAttentionWorkOrder = {
+  workOrderNumber: number;
+  rentvineUrl: string;
+  propertyCode: string | null;
+  unitCode: string | null;
+  description: string;
+  lastUpdated: string | null;
+};
+
+// The actual work orders behind the "needs attention" count — same filter
+// as getOpenWorkOrderStats' staleRows, with enough detail to show a
+// useful list and a direct link to each one in Rentvine. Stalest first.
+export async function getNeedsAttentionWorkOrders(todayISO: string): Promise<NeedsAttentionWorkOrder[]> {
+  const rows = await runWorkOrderReport(
+    ["workOrderNumber", "propertyName", "unitName", "description", "dateTimeModified"],
+    [
+      { name: "primaryWorkOrderStatusID", comparator: "in", values: OPEN_PRIMARY_STATUSES },
+      { name: "dateTimeModified", comparator: "onOrBeforeDateRange", endDate: addDays(todayISO, -3) },
+    ]
+  );
+  const workOrders = rows
+    .map((r): NeedsAttentionWorkOrder | null => {
+      const workOrderNumber = num(r.workOrderNumber);
+      if (workOrderNumber == null) return null;
+      return {
+        workOrderNumber,
+        rentvineUrl: rentvineAppUrl(`/maintenance/work-orders/${workOrderNumber - WORK_ORDER_DISPLAY_NUMBER_OFFSET}`),
+        propertyCode: str(r.propertyName) ?? null,
+        unitCode: str(r.unitName) ?? null,
+        description: str(r.description) ?? "(no description)",
+        lastUpdated: str(r.dateTimeModified) ?? null,
+      };
+    })
+    .filter((r): r is NeedsAttentionWorkOrder => r != null);
+  workOrders.sort((a, b) => (a.lastUpdated ?? "").localeCompare(b.lastUpdated ?? ""));
+  return workOrders;
 }
 
 // The four "tied to today" metrics — not affected by the dashboard's date
