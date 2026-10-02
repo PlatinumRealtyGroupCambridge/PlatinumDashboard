@@ -61,12 +61,15 @@ function parseReportRows(raw: unknown, displayColumns: string[]): ReportRow[] {
 // yields nothing, callers can surface rawSample directly (e.g. to an admin
 // viewing the page) instead of the mismatch only being visible in Vercel's
 // server logs, which nobody was able to check last time this broke.
-async function runWorkOrderReport(
+// Works against any of Rentvine's report routes (work-order, unit, ...),
+// not just work orders.
+async function runReport(
+  route: string,
   displayColumns: string[],
   filters: ReportFilter[]
 ): Promise<{ rows: ReportRow[]; rawSample: string }> {
   const json = JSON.stringify({ displayColumns, filters });
-  const raw = await fetchRentvineApi("/reports/work-order", {
+  const raw = await fetchRentvineApi(`/reports/${route}`, {
     exportTypeID: 1,
     orientation: 2,
     showHeader: "true",
@@ -75,9 +78,16 @@ async function runWorkOrderReport(
   const rows = parseReportRows(raw, displayColumns);
   const rawSample = JSON.stringify(raw, null, 2).slice(0, 4000);
   if (rows.length === 0) {
-    console.error("Rentvine work-order report returned 0 parsed rows — raw response sample:", rawSample);
+    console.error(`Rentvine ${route} report returned 0 parsed rows — raw response sample:`, rawSample);
   }
   return { rows, rawSample };
+}
+
+async function runWorkOrderReport(
+  displayColumns: string[],
+  filters: ReportFilter[]
+): Promise<{ rows: ReportRow[]; rawSample: string }> {
+  return runReport("work-order", displayColumns, filters);
 }
 
 // Rentvine's "Primary Work Order Status" groups its ~12 custom pipeline
@@ -130,6 +140,34 @@ function daysBetween(fromISO: string, toISO: string): number {
   return Math.round((b - a) / 86400000);
 }
 
+// A tag field can hold more than one tag name, comma-separated (e.g.
+// "Exclude, VIP") — matches any of them case-insensitively rather than
+// requiring an exact single-tag value.
+function hasExcludeTag(value: unknown): boolean {
+  return typeof value === "string" && value.split(",").some((part) => part.trim().toLowerCase() === "exclude");
+}
+
+// Properties/units tagged "Exclude" in Rentvine — their work orders are
+// left off the needs-attention list. Confirmed via the Unit report's
+// propertyTagDetail/unitTagDetail columns (plain readable tag text,
+// unlike the Property report's own tagID filter, which has no equivalent
+// readable column). Portfolio-level "Exclude" tags aren't handled here —
+// the Portfolio report exposes a tagID filter but no readable tag-name
+// column was found to resolve it against, so there's currently no
+// reliable way to look that up.
+async function getExcludedPropertyAndUnitIds(): Promise<{ propertyIds: Set<number>; unitIds: Set<number> }> {
+  const { rows } = await runReport("unit", ["propertyID", "unitID", "propertyTagDetail", "unitTagDetail"], []);
+  const propertyIds = new Set<number>();
+  const unitIds = new Set<number>();
+  for (const r of rows) {
+    const propertyId = num(r.propertyID);
+    const unitId = num(r.unitID);
+    if (propertyId != null && hasExcludeTag(r.propertyTagDetail)) propertyIds.add(propertyId);
+    if (unitId != null && hasExcludeTag(r.unitTagDetail)) unitIds.add(unitId);
+  }
+  return { propertyIds, unitIds };
+}
+
 export type NeedsAttentionWorkOrder = {
   workOrderNumber: number;
   rentvineUrl: string;
@@ -151,13 +189,16 @@ export type NeedsAttentionWorkOrder = {
 export async function getNeedsAttentionWorkOrders(
   todayISO: string
 ): Promise<{ workOrders: NeedsAttentionWorkOrder[]; rawSample?: string }> {
-  const { rows, rawSample } = await runWorkOrderReport(
-    ["workOrderNumber", "propertyName", "unitName", "description", "dateTimeModified"],
-    [
-      { name: "primaryWorkOrderStatusID", comparator: "in", values: OPEN_PRIMARY_STATUSES },
-      { name: "dateTimeModified", comparator: "onOrBeforeDateRange", endDate: addDays(todayISO, -3) },
-    ]
-  );
+  const [{ rows, rawSample }, excluded] = await Promise.all([
+    runWorkOrderReport(
+      ["workOrderNumber", "propertyID", "unitID", "description", "dateTimeModified"],
+      [
+        { name: "primaryWorkOrderStatusID", comparator: "in", values: OPEN_PRIMARY_STATUSES },
+        { name: "dateTimeModified", comparator: "onOrBeforeDateRange", endDate: addDays(todayISO, -3) },
+      ]
+    ),
+    getExcludedPropertyAndUnitIds(),
+  ]);
   const workOrders = rows
     .map((r): NeedsAttentionWorkOrder | null => {
       // propertyName/unitName (what was originally requested) come back
@@ -170,6 +211,12 @@ export async function getNeedsAttentionWorkOrders(
       const workOrderId = num(r.workOrderID);
       const workOrderNumber = num(r.workOrderNumber);
       if (workOrderId == null || workOrderNumber == null) return null;
+      const propertyId = num(r.propertyID);
+      const unitId = num(r.unitID);
+      const isExcluded =
+        (propertyId != null && excluded.propertyIds.has(propertyId)) ||
+        (unitId != null && excluded.unitIds.has(unitId));
+      if (isExcluded) return null;
       const lastUpdated = str(r.dateTimeModified) ?? null;
       return {
         workOrderNumber,
