@@ -189,7 +189,7 @@ export default function NeedsAttentionList({ label, isAdmin }: { label: string; 
                       </th>
                     );
                   })}
-                  <th style={{ padding: "10px 16px" }}>Description</th>
+                  <th style={{ padding: "10px 16px", minWidth: 360, width: "100%" }}>Description</th>
                 </tr>
               </thead>
               <tbody>
